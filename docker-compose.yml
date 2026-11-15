@@ -1,0 +1,23 @@
+services:
+  proxygosha:
+    build: .
+    container_name: proxygosha-node
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
+    ports:
+      - "127.0.0.1:3000:3000"
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: proxygosha-cloudflared
+    restart: unless-stopped
+    depends_on:
+      - proxygosha
+    command: tunnel --no-autoupdate run --token ${CF_TUNNEL_TOKEN}
+    environment:
+      - TUNNEL_TRANSPORT_PROTOCOL=quic

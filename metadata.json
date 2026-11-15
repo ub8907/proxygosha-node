@@ -1,0 +1,6 @@
+{
+  "name": "ProxyGosha Node.js",
+  "description": "High-performance pure Node.js & Express Telegram WebProxy refactored from ProxyGosha with native Cloudflare Tunnel support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
