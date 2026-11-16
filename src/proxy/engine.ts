@@ -752,15 +752,21 @@ export function attachWebSocketServer(
       recordTunnelHeaders(req, host);
 
       if (!hostAllowed(cfg, host)) {
+        STATS.wsRejects++;
+        logEvent("ws_reject", `host=${host} reason=host_not_allowed`);
         rejectUpgrade(socket, 404);
         return;
       }
 
       if (req.method !== "GET") {
+        STATS.wsRejects++;
+        logEvent("ws_reject", `method=${req.method} reason=bad_method`);
         rejectUpgrade(socket, 404);
         return;
       }
       if (req.headers.authorization) {
+        STATS.wsRejects++;
+        logEvent("ws_reject", "reason=unexpected_auth_header");
         rejectUpgrade(socket, 404);
         return;
       }
@@ -773,6 +779,8 @@ export function attachWebSocketServer(
         .filter(Boolean);
 
       if (offered.length !== 1) {
+        STATS.wsRejects++;
+        logEvent("ws_reject", `reason=bad_protocol_count(${offered.length})`);
         rejectUpgrade(socket, 404);
         return;
       }
@@ -787,16 +795,22 @@ export function attachWebSocketServer(
         const rest = protocol.substring(15);
         const dot = rest.lastIndexOf(".");
         if (dot <= 0 || !/^[1-9][0-9]{0,7}$/.test(rest.substring(dot + 1))) {
+          STATS.wsRejects++;
+          logEvent("ws_reject", "reason=invalid_lane_id");
           rejectUpgrade(socket, 404);
           return;
         }
         token = rest.substring(0, dot);
         laneId = parseInt(rest.substring(dot + 1), 10);
         if (laneId > 0xffffff) {
+          STATS.wsRejects++;
+          logEvent("ws_reject", "reason=lane_overflow");
           rejectUpgrade(socket, 404);
           return;
         }
       } else {
+        STATS.wsRejects++;
+        logEvent("ws_reject", "reason=unknown_subprotocol");
         rejectUpgrade(socket, 404);
         return;
       }
@@ -804,12 +818,14 @@ export function attachWebSocketServer(
       const verified = verifyToken(cfg, token, TOKEN_KIND_SESSION);
       if (!verified) {
         STATS.wsRejects++;
-        logEvent("ws_reject", "invalid or expired session token");
+        logEvent("ws_reject", "reason=invalid_or_expired_token");
         rejectUpgrade(socket, 404);
         return;
       }
 
       if ((verified.mode === 1 || verified.mode === 2) && !cfg.acceptGenerated) {
+        STATS.wsRejects++;
+        logEvent("ws_reject", "reason=generated_disabled");
         rejectUpgrade(socket, 404);
         return;
       }

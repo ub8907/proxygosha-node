@@ -30,7 +30,7 @@ import {
 } from "./config.ts";
 import { probeDcs } from "./engine.ts";
 import { sendDecoy, serveBridge } from "./templates.ts";
-import { fmtBytes, fmtDuration, LOG, PROCESS_START, STATS } from "./telemetry.ts";
+import { fmtBytes, fmtDuration, LOG, logEvent, PROCESS_START, STATS } from "./telemetry.ts";
 import { getTunnelStatus, recordTunnelHeaders } from "./tunnel.ts";
 
 export interface ProxyRouterOptions {
@@ -118,6 +118,7 @@ function sendSecretText(
 async function handleSession(req: Request, res: Response, cfg: ProxyRuntime): Promise<void> {
   const auth = req.headers.authorization || "";
   if (!auth.startsWith("Bearer ") || auth.length <= 7) {
+    logEvent("session_reject", `method=${req.method} reason=missing_bearer`);
     sendNotFound(res);
     return;
   }
@@ -125,6 +126,7 @@ async function handleSession(req: Request, res: Response, cfg: ProxyRuntime): Pr
 
   if (req.method === "DELETE") {
     if (!verifyToken(cfg, token, TOKEN_KIND_SESSION)) {
+      logEvent("session_reject", "method=DELETE reason=invalid_token");
       sendNotFound(res);
       return;
     }
@@ -133,36 +135,44 @@ async function handleSession(req: Request, res: Response, cfg: ProxyRuntime): Pr
   }
 
   if (req.method !== "POST") {
+    logEvent("session_reject", `method=${req.method} reason=bad_method`);
     sendNotFound(res);
     return;
   }
   if (req.headers.cookie) {
+    logEvent("session_reject", "reason=cookie_present");
     sendNotFound(res);
     return;
   }
-  if ((req.headers["content-type"] || "").toLowerCase() !== "application/octet-stream") {
+  const contentType = (req.headers["content-type"] || "").toLowerCase().split(";")[0].trim();
+  if (contentType !== "application/octet-stream") {
+    logEvent("session_reject", `reason=bad_ct(${contentType || "empty"})`);
     sendNotFound(res);
     return;
   }
 
   const declaredLength = parseInt(String(req.headers["content-length"] || ""), 10);
   if (Number.isFinite(declaredLength) && declaredLength > 4096) {
+    logEvent("session_reject", `reason=too_large(${declaredLength})`);
     sendNotFound(res);
     return;
   }
 
   const verified = verifyToken(cfg, token, TOKEN_KIND_BOOTSTRAP);
   if (!verified) {
+    logEvent("session_reject", "reason=invalid_bootstrap");
     sendNotFound(res);
     return;
   }
   if ((verified.mode === 1 || verified.mode === 2) && !cfg.acceptGenerated) {
+    logEvent("session_reject", `reason=generated_disabled mode=${verified.mode}`);
     sendNotFound(res);
     return;
   }
 
   const body = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
   if (body.length !== 9) {
+    logEvent("session_reject", `reason=bad_body_len(${body.length})`);
     sendNotFound(res);
     return;
   }
@@ -177,11 +187,13 @@ async function handleSession(req: Request, res: Response, cfg: ProxyRuntime): Pr
     body[7] !== 1 ||
     body[8] !== 1
   ) {
+    logEvent("session_reject", "reason=bad_hello_magic");
     sendNotFound(res);
     return;
   }
 
   const sessionToken = issueToken(cfg, TOKEN_KIND_SESSION, cfg.sessionTtl, verified.mode);
+  logEvent("session_ok", `carrier=${cfg.carrier} mode=${verified.mode}`);
   res
     .status(200)
     .setHeader("Content-Type", "application/octet-stream")
@@ -486,14 +498,17 @@ export function createProxyRouter(options: ProxyRouterOptions): Router {
         }
         const keys = Array.from(urlObj.searchParams.keys());
         if (keys.length !== 1 || keys[0] !== "bridge" || rawBridge.length !== 1) {
+          logEvent("bridge_reject", `host=${host} reason=extra_params`);
           sendNotFound(res);
           return;
         }
         const mode = bridgeMode(cfg, host, rawBridge[0], port);
         if (mode < 0) {
+          logEvent("bridge_reject", `host=${host} port=${port || "443"} reason=secret_mismatch`);
           sendNotFound(res);
           return;
         }
+        logEvent("bridge_ok", `host=${host} port=${port || "443"} mode=${mode}`);
         serveBridge(req, res, cfg, host, proto, mode, port);
         return;
       }
