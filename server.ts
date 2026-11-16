@@ -22,11 +22,13 @@ async function bootstrapServer() {
   const rootDir = process.cwd();
   const distDir = path.resolve(rootDir, "dist");
   const distIndexPath = path.join(distDir, "index.html");
+  const isDevCommand =
+    Boolean(process.env.npm_lifecycle_event?.includes("dev")) ||
+    process.execArgv.some((arg) => arg.includes("tsx")) ||
+    Boolean(process.env._?.includes("tsx"));
   const isProd =
     process.env.NODE_ENV === "production" ||
-    (!process.env.npm_lifecycle_event?.includes("dev") &&
-      !process.argv[1]?.includes("tsx") &&
-      fs.existsSync(distIndexPath));
+    (!isDevCommand && fs.existsSync(distIndexPath));
 
   let vite: Awaited<ReturnType<typeof import("vite")["createServer"]>> | null = null;
 

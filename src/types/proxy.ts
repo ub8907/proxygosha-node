@@ -80,6 +80,14 @@ export interface PanelStateData {
   logs: LogEntryData[];
 }
 
+export interface ProbeAltPortResult {
+  port: number;
+  ok: boolean;
+  ms: number;
+  mtprotoOk: boolean | null;
+  reason: string;
+}
+
 export interface ProbeResultData {
   dc: number;
   ip: string;
@@ -89,4 +97,5 @@ export interface ProbeResultData {
   mtprotoOk?: boolean | null;
   mtprotoMs?: number | null;
   reason?: string;
+  altPorts?: ProbeAltPortResult[];
 }

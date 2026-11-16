@@ -258,13 +258,31 @@ export function StatusView({ data, adminBasePath, lang }: StatusViewProps) {
                       ) : r.mtprotoOk === null ? (
                         <span className="text-xs text-slate-500 font-mono">{t.mtprotoCdnLabel}</span>
                       ) : (
-                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-red-700">
-                          <XCircle className="w-3.5 h-3.5" />
-                          <span>
-                            {t.mtprotoFailLabel}
-                            {r.reason ? ` (${r.reason})` : ""}
+                        <div className="space-y-1">
+                          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-red-700">
+                            <XCircle className="w-3.5 h-3.5" />
+                            <span>
+                              {t.mtprotoFailLabel}
+                              {r.reason ? ` (${r.reason})` : ""}
+                            </span>
                           </span>
-                        </span>
+                          {r.altPorts && r.altPorts.length > 0 && (
+                            <div className="flex flex-wrap gap-1.5 font-mono text-[11px]">
+                              {r.altPorts.map((alt) => (
+                                <span
+                                  key={alt.port}
+                                  className={
+                                    alt.mtprotoOk
+                                      ? "px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200"
+                                      : "px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200"
+                                  }
+                                >
+                                  :{alt.port} {alt.mtprotoOk ? `OK (${alt.ms}ms)` : alt.reason}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       )}
                     </td>
                     <td className="py-2.5 px-5 text-right font-mono tabular-nums text-xs text-slate-700">

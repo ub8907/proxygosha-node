@@ -27,6 +27,14 @@ import {
 import { fmtBytes, fmtDuration, logEvent, reportError, STATS } from "./telemetry.ts";
 import { recordTunnelHeaders } from "./tunnel.ts";
 
+export interface ProbeAltPortResult {
+  port: number;
+  ok: boolean;
+  ms: number;
+  mtprotoOk: boolean | null;
+  reason: string;
+}
+
 export interface ProbeResult {
   dc: number;
   ip: string;
@@ -36,6 +44,7 @@ export interface ProbeResult {
   mtprotoOk: boolean | null;
   mtprotoMs: number | null;
   reason: string;
+  altPorts?: ProbeAltPortResult[];
 }
 
 function frame(type: number, id: number, payload: Uint8Array): Buffer {
@@ -991,12 +1000,32 @@ export async function probeDcs(cfg: ProxyRuntime): Promise<ProbeResult[]> {
     .map(Number)
     .sort((a, b) => a - b);
   const results: ProbeResult[] = [];
-  const probePort = cfg.dcPorts?.[0] || cfg.dcPort || 443;
+  const configuredPorts = cfg.dcPorts?.length ? cfg.dcPorts : [443, 80, 5222];
+  const probePort = configuredPorts[0] || cfg.dcPort || 443;
+  const fallbackPorts = [443, 80, 5222].filter((p) => p !== probePort);
 
   const probeOne = async (key: number) => {
     const ips = Array.isArray(cfg.dc[key]) ? cfg.dc[key] : [cfg.dc[key]];
     const ip = ips[Math.floor(Math.random() * ips.length)];
     const r = await probeSingleDc(key, ip, probePort);
+
+    // 若主端口 TCP 可达但 MTProto 握手被断开（常见于本机透明代理/防火墙仅嗅探 443），自动探测 80/5222
+    if (key !== 203 && r.mtprotoOk === false && fallbackPorts.length > 0) {
+      const altResults = await Promise.all(
+        fallbackPorts.map(async (altPort) => {
+          const ar = await probeSingleDc(key, ip, altPort);
+          return {
+            port: altPort,
+            ok: ar.ok,
+            ms: ar.ms,
+            mtprotoOk: ar.mtprotoOk,
+            reason: ar.reason,
+          };
+        })
+      );
+      r.altPorts = altResults;
+    }
+
     results.push(r);
   };
 
