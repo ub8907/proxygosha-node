@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Activity, CheckCircle2, XCircle } from "lucide-react";
+import { Activity, AlertTriangle, CheckCircle2, XCircle } from "lucide-react";
 import type { Lang } from "../proxy/i18n.ts";
 import { TRANSLATIONS } from "../proxy/i18n.ts";
 import type { PanelStateData, ProbeResultData } from "../types/proxy.ts";
@@ -62,6 +62,7 @@ export function StatusView({ data, adminBasePath, lang }: StatusViewProps) {
           </div>
           <div className="mt-1 text-xs text-slate-500 font-mono tabular-nums">
             {t.dcOkFailLabel}: {data.stats.dcSuccess} / {data.stats.dcFails}
+            {(data.stats.dcEmptyCloses ?? 0) > 0 ? ` · EOF(0B): ${data.stats.dcEmptyCloses}` : ""}
           </div>
         </div>
 
@@ -177,6 +178,17 @@ export function StatusView({ data, adminBasePath, lang }: StatusViewProps) {
         </div>
       </div>
 
+      {((data.stats.dcEmptyCloses ?? 0) > 0 ||
+        (probeResults && probeResults.some((r) => r.dc !== 203 && r.ok && r.mtprotoOk === false))) && (
+        <div className="bg-amber-50 border border-amber-300 rounded-lg p-4 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="space-y-1 text-xs text-amber-900">
+            <div className="font-semibold text-sm">{t.dcEmptyWarnTitle}</div>
+            <p className="leading-relaxed text-amber-800">{t.dcEmptyWarnBody}</p>
+          </div>
+        </div>
+      )}
+
       {/* Telegram DC 连通性探测区域 */}
       <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-4">
@@ -209,6 +221,7 @@ export function StatusView({ data, adminBasePath, lang }: StatusViewProps) {
                   <th className="py-2.5 px-5">{t.probeColDc}</th>
                   <th className="py-2.5 px-5">{t.probeColIp}</th>
                   <th className="py-2.5 px-5">{t.probeColStatus}</th>
+                  <th className="py-2.5 px-5">{t.probeColMtproto}</th>
                   <th className="py-2.5 px-5 text-right">{t.probeColRtt}</th>
                 </tr>
               </thead>
@@ -216,7 +229,10 @@ export function StatusView({ data, adminBasePath, lang }: StatusViewProps) {
                 {probeResults.map((r) => (
                   <tr key={r.dc} className="hover:bg-slate-50/70">
                     <td className="py-2.5 px-5 font-mono font-medium text-slate-900">DC{r.dc}</td>
-                    <td className="py-2.5 px-5 font-mono text-xs text-slate-700">{r.ip}</td>
+                    <td className="py-2.5 px-5 font-mono text-xs text-slate-700">
+                      {r.ip}
+                      {r.port ? `:${r.port}` : ""}
+                    </td>
                     <td className="py-2.5 px-5">
                       {r.ok ? (
                         <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700">
@@ -227,6 +243,27 @@ export function StatusView({ data, adminBasePath, lang }: StatusViewProps) {
                         <span className="inline-flex items-center gap-1.5 text-xs font-medium text-red-700">
                           <XCircle className="w-3.5 h-3.5" />
                           <span>{t.failed}</span>
+                        </span>
+                      )}
+                    </td>
+                    <td className="py-2.5 px-5">
+                      {r.mtprotoOk === true ? (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700">
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>
+                            {t.mtprotoOkLabel}
+                            {r.mtprotoMs !== null && r.mtprotoMs !== undefined ? ` (${r.mtprotoMs} ms)` : ""}
+                          </span>
+                        </span>
+                      ) : r.mtprotoOk === null ? (
+                        <span className="text-xs text-slate-500 font-mono">{t.mtprotoCdnLabel}</span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 text-xs font-medium text-red-700">
+                          <XCircle className="w-3.5 h-3.5" />
+                          <span>
+                            {t.mtprotoFailLabel}
+                            {r.reason ? ` (${r.reason})` : ""}
+                          </span>
                         </span>
                       )}
                     </td>

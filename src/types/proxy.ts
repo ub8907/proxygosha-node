@@ -55,6 +55,7 @@ export interface PanelStateData {
     adTagConfigured: boolean;
     extraHosts: string[];
     allowedHosts: string[];
+    dcPorts?: number[];
   };
   hostConfigs: HostConfigEntry[];
   stats: {
@@ -63,6 +64,7 @@ export interface PanelStateData {
     streams: number;
     dcAttempts: number;
     dcFails: number;
+    dcEmptyCloses?: number;
     dcSuccess: number;
     bytesUp: number;
     bytesDown: number;
@@ -81,6 +83,10 @@ export interface PanelStateData {
 export interface ProbeResultData {
   dc: number;
   ip: string;
+  port?: number;
   ok: boolean;
   ms: number;
+  mtprotoOk?: boolean | null;
+  mtprotoMs?: number | null;
+  reason?: string;
 }

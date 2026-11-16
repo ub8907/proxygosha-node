@@ -1,5 +1,5 @@
 import net from "node:net";
-import { randomBytes } from "node:crypto";
+import { createCipheriv, randomBytes } from "node:crypto";
 import type { IncomingMessage, Server as HttpServer } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, WebSocket } from "ws";
@@ -30,8 +30,12 @@ import { recordTunnelHeaders } from "./tunnel.ts";
 export interface ProbeResult {
   dc: number;
   ip: string;
+  port: number;
   ok: boolean;
   ms: number;
+  mtprotoOk: boolean | null;
+  mtprotoMs: number | null;
+  reason: string;
 }
 
 function frame(type: number, id: number, payload: Uint8Array): Buffer {
@@ -133,6 +137,10 @@ class Stream {
   private sendCredit: number;
   private pendingDown: Buffer | null = null;
   private drainWaiters: Array<() => void> = [];
+  private dcKey = 0;
+  private dcTarget = "";
+  private dcSentPayloadBytes = 0;
+  private dcRecvBytes = 0;
 
   private clientReadCipher: ObfuscatedCtrStream | null = null;
   private dcWriteCipher: ObfuscatedCtrStream | null = null;
@@ -215,6 +223,7 @@ class Stream {
 
     const dcId = tail.readInt16LE(4);
     const dcKey = Math.abs(dcId);
+    this.dcKey = dcKey;
     const address = this.session.cfg.dc[dcKey];
     if (!address) throw new Error("bad dc");
 
@@ -268,6 +277,7 @@ class Stream {
       STATS.dcAttempts++;
       try {
         socket = await connectTcpWithTimeout(hostIp, port, 3000);
+        this.dcTarget = `${hostIp}:${port}`;
       } catch (err) {
         lastError = err;
         STATS.dcFails++;
@@ -354,11 +364,13 @@ class Stream {
     const plain = this.clientReadCipher.update(payload);
     if (this.dead) return;
     const encrypted = this.dcWriteCipher.update(plain);
+    this.dcSentPayloadBytes += encrypted.length;
     await this.writeRawSocket(encrypted);
     this.grant(payload.length);
   }
 
   private handleDcData(chunk: Buffer): void {
+    this.dcRecvBytes += chunk.length;
     const combined = this.pendingDown ? Buffer.concat([this.pendingDown, chunk]) : chunk;
     this.pendingDown = null;
 
@@ -422,6 +434,13 @@ class Stream {
     for (const resolve of waiters) resolve();
 
     if (this.socket) {
+      if (this.dcSentPayloadBytes > 0 && this.dcRecvBytes === 0) {
+        STATS.dcEmptyCloses++;
+        logEvent(
+          "dc_eof_empty",
+          `dc=${this.dcKey} target=${this.dcTarget} up=${this.dcSentPayloadBytes}B down=0B`
+        );
+      }
       try {
         this.socket.removeAllListeners();
         this.socket.destroy();
@@ -867,23 +886,118 @@ export function attachWebSocketServer(
   });
 }
 
+function probeSingleDc(dc: number, ip: string, port: number): Promise<ProbeResult> {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    let tcpMs = 0;
+    let tcpConnected = false;
+    let settled = false;
+    let rxBytes = 0;
+    const sock = net.createConnection({ host: ip, port });
+
+    const finish = (mtprotoOk: boolean | null, reason: string) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        sock.removeAllListeners();
+        sock.destroy();
+      } catch {
+        // ignore
+      }
+      resolve({
+        dc,
+        ip,
+        port,
+        ok: tcpConnected,
+        ms: tcpConnected ? tcpMs : Date.now() - started,
+        mtprotoOk,
+        mtprotoMs: tcpConnected ? Date.now() - started : null,
+        reason,
+      });
+    };
+
+    const timer = setTimeout(() => {
+      finish(dc === 203 && tcpConnected ? null : false, tcpConnected ? "mtproto_timeout" : "tcp_timeout");
+    }, 3000);
+
+    sock.once("connect", () => {
+      tcpConnected = true;
+      tcpMs = Date.now() - started;
+      sock.setNoDelay(true);
+
+      // DC203 为媒体/CDN 节点，不直接响应明文 req_pq_multi，仅保留 TCP 连通测试
+      if (dc === 203) {
+        finish(null, "cdn_tcp_ok");
+        return;
+      }
+
+      // 构造无 secret 的标准 Obfuscated2 (0xef 缩写模式) + req_pq_multi 握手包，验证真实 MTProto 可达性
+      const nonce = Buffer.allocUnsafe(64);
+      let safe = false;
+      for (let i = 0; i < 16 && !safe; i++) {
+        randomBytes(56).copy(nonce, 0);
+        safe = safeDcHeaderPrefix(nonce);
+      }
+      if (!safe) {
+        Buffer.from([0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0xde, 0xf0]).copy(nonce, 0);
+      }
+      const writeKey = nonce.subarray(8, 40);
+      const writeIv = nonce.subarray(40, 56);
+      const rev = reverse(nonce.subarray(8, 56));
+      const readKey = rev.subarray(0, 32);
+      const readIv = rev.subarray(32, 48);
+
+      const enc = createCipheriv("aes-256-ctr", writeKey, writeIv);
+      enc.update(Buffer.alloc(56));
+      const dec = createCipheriv("aes-256-ctr", readKey, readIv);
+
+      const tail = Buffer.alloc(8);
+      tail.fill(0xef, 0, 4);
+      tail.writeInt16LE(dc, 4);
+      tail.writeUInt16LE(0, 6);
+      enc.update(tail).copy(nonce, 56);
+
+      const reqPq = Buffer.alloc(40);
+      reqPq.writeBigUInt64LE(0n, 0);
+      reqPq.writeBigUInt64LE(BigInt(Math.floor(Date.now() / 1000)) << 32n, 8);
+      reqPq.writeInt32LE(20, 16);
+      reqPq.writeUInt32LE(0xbe7e8ef1, 20);
+      randomBytes(16).copy(reqPq, 24);
+      const encReq = enc.update(Buffer.concat([Buffer.from([10]), reqPq]));
+
+      const rxChunks: Buffer[] = [];
+      sock.on("data", (chunk: Buffer) => {
+        rxBytes += chunk.length;
+        rxChunks.push(dec.update(chunk));
+        if (rxBytes >= 25) {
+          const plain = Buffer.concat(rxChunks);
+          const validUnencrypted = plain.subarray(1, 9).equals(Buffer.alloc(8));
+          finish(validUnencrypted, validUnencrypted ? "resPQ_ok" : "invalid_reply");
+        }
+      });
+
+      sock.write(Buffer.concat([nonce, encReq]));
+    });
+
+    sock.once("end", () => finish(false, `eof(${rxBytes}B)`));
+    sock.once("close", () => finish(false, `close(${rxBytes}B)`));
+    sock.once("error", (err) => finish(false, err.message));
+  });
+}
+
 export async function probeDcs(cfg: ProxyRuntime): Promise<ProbeResult[]> {
   const keys = Object.keys(cfg.dc)
     .map(Number)
     .sort((a, b) => a - b);
   const results: ProbeResult[] = [];
+  const probePort = cfg.dcPorts?.[0] || cfg.dcPort || 443;
 
   const probeOne = async (key: number) => {
     const ips = Array.isArray(cfg.dc[key]) ? cfg.dc[key] : [cfg.dc[key]];
     const ip = ips[Math.floor(Math.random() * ips.length)];
-    const started = Date.now();
-    try {
-      const sock = await connectTcpWithTimeout(ip, cfg.dcPort || 443, 2500);
-      sock.destroy();
-      results.push({ dc: key, ip, ok: true, ms: Date.now() - started });
-    } catch {
-      results.push({ dc: key, ip, ok: false, ms: Date.now() - started });
-    }
+    const r = await probeSingleDc(key, ip, probePort);
+    results.push(r);
   };
 
   for (let i = 0; i < keys.length; i += 3) {
@@ -893,7 +1007,9 @@ export async function probeDcs(cfg: ProxyRuntime): Promise<ProbeResult[]> {
   results.sort((a, b) => a.dc - b.dc);
   logEvent(
     "dc_probe",
-    results.map((r) => `DC${r.dc}${r.ok ? ":ok" : ":fail"}`).join(" ")
+    results
+      .map((r) => `DC${r.dc}:${r.ok ? (r.mtprotoOk === false ? "tcp_only_eof" : "ok") : "fail"}`)
+      .join(" ")
   );
   return results;
 }

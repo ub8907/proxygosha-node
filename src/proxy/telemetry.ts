@@ -13,6 +13,7 @@ export const STATS = {
   streams: 0,
   dcAttempts: 0,
   dcFails: 0,
+  dcEmptyCloses: 0,
   bytesUp: 0,
   bytesDown: 0,
   wsRejects: 0,

@@ -427,7 +427,7 @@ async function pollLane(lane){
 }
 function openWebSocket(){
  return new Promise((resolve,reject)=>{
-  const target=relayBase.replace(/^http(s?):/,\x27ws$1:\x27)+wsPath,socket=new WebSocket(target,'tproxy-v1.'+sessionToken);
+  const target=relayBase.replace(/^http(s?):/,'ws$1:')+wsPath,socket=new WebSocket(target,'tproxy-v1.'+sessionToken);
   webSocket=socket;socket.binaryType='arraybuffer';
   let opened=false;
   socket.onopen=()=>{
@@ -513,7 +513,7 @@ function finishWebSocketLane(lane,notify){
  if(notify&&port&&!closed){const frame=closeFrame(lane.id);port.postMessage(frame,[frame])}
 }
 function openWebSocketLane(lane){
- const target=relayBase.replace(/^http(s?):/,\x27ws$1:\x27)+wsPath;
+ const target=relayBase.replace(/^http(s?):/,'ws$1:')+wsPath;
  const socket=new WebSocket(target,'tproxy-lane-v1.'+sessionToken+'.'+lane.id);
  lane.socket=socket;socket.binaryType='arraybuffer';
  socket.onopen=()=>{if(closed||lane.finished){socket.close();return}lane.opened=true;status('connected');runWebSocketLaneUp(lane)};
@@ -655,12 +655,8 @@ export async function sendDecoy(req: Request, res: Response, decoyUrl: string): 
 export function serveBridge(req: Request, res: Response, cfg: ProxyRuntime, host: string, proto: "https" | "http", mode: number, port: string): void {
   const nonce = b64uEncode(randomBytes(18));
   const bootstrap = issueToken(cfg, TOKEN_KIND_BOOTSTRAP, cfg.bootstrapTtl, mode);
-  const authority = port && port !== "443" && port !== "80" ? `${host}:${port}` : host;
-  const relayBase = JSON.stringify(`${proto}://${authority}/`);
-
   const body = BRIDGE_HTML
     .replaceAll("__NONCE__", nonce)
-    .replaceAll("__RELAY_BASE__", relayBase)
     .replaceAll("__BOOTSTRAP__", JSON.stringify(bootstrap))
     .replaceAll("__CARRIER_MODE__", JSON.stringify(cfg.carrier))
     .replaceAll("__BATCH_LIMIT__", String(cfg.batchBytes))

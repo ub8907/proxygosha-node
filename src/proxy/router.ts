@@ -230,6 +230,7 @@ function buildPanelStatePayload(cfg: ProxyRuntime, host: string, proto: "https" 
       adTagConfigured: Boolean(cfg.adTag),
       extraHosts: cfg.extraHosts,
       allowedHosts: cfg.hosts,
+      dcPorts: cfg.dcPorts,
     },
     hostConfigs,
     stats: {
@@ -238,6 +239,7 @@ function buildPanelStatePayload(cfg: ProxyRuntime, host: string, proto: "https" 
       streams: STATS.streams,
       dcAttempts: STATS.dcAttempts,
       dcFails: STATS.dcFails,
+      dcEmptyCloses: STATS.dcEmptyCloses,
       dcSuccess: Math.max(0, STATS.dcAttempts - STATS.dcFails),
       bytesUp: STATS.bytesUp,
       bytesDown: STATS.bytesDown,

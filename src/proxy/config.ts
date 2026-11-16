@@ -112,6 +112,14 @@ export function resolveConfig(env: NodeJS.ProcessEnv) {
   const carrier: "websocket" | "websocket-lanes" =
     carrierEnv === "websocket" || carrierEnv === "websocket-lanes" ? carrierEnv : DEFAULT_CONFIG.carrier;
 
+  let dcPorts: number[] = DEFAULT_CONFIG.dcPorts;
+  if (typeof merged.DC_PORTS === "string" && merged.DC_PORTS.trim()) {
+    const parsedPorts = merged.DC_PORTS.split(/[,\s]+/)
+      .map((v) => parseInt(v.trim(), 10))
+      .filter((n) => Number.isFinite(n) && n >= 1 && n <= 65535);
+    if (parsedPorts.length > 0) dcPorts = parsedPorts;
+  }
+
   return {
     secretHex,
     adminKey,
@@ -131,8 +139,8 @@ export function resolveConfig(env: NodeJS.ProcessEnv) {
       ? (merged.ACCEPT_GENERATED === "true" || merged.ACCEPT_GENERATED === "1")
       : DEFAULT_CONFIG.acceptGenerated,
     dc: DEFAULT_CONFIG.dc,
-    dcPort: DEFAULT_CONFIG.dcPort,
-    dcPorts: DEFAULT_CONFIG.dcPorts,
+    dcPort: dcPorts[0] || DEFAULT_CONFIG.dcPort,
+    dcPorts,
     carrier,
     batchBytes: DEFAULT_CONFIG.batchBytes,
     bootstrapTtl: DEFAULT_CONFIG.bootstrapTtl,
@@ -235,7 +243,7 @@ export function buildRuntime(cfg: ReturnType<typeof resolveConfig>): ProxyRuntim
 
 export function getRuntime(env: NodeJS.ProcessEnv = process.env): ProxyRuntime | null {
   const resolved = resolveConfig(env);
-  const cacheKey = `${resolved.secretHex}:${resolved.generatorKey}:${resolved.hostnames.join(",")}:${resolved.adTagHex}:${resolved.decoyUrl}:${resolved.maxStreams}:${resolved.sessionPath}:${resolved.wsPath}:${resolved.debug}:${resolved.carrier}:${resolved.acceptGenerated}:${resolved.generatorEnabled}:${resolved.adminKey}:${resolved.extraHosts.join(",")}:${resolved.ephemeralSetup}`;
+  const cacheKey = `${resolved.secretHex}:${resolved.generatorKey}:${resolved.hostnames.join(",")}:${resolved.adTagHex}:${resolved.decoyUrl}:${resolved.maxStreams}:${resolved.sessionPath}:${resolved.wsPath}:${resolved.debug}:${resolved.carrier}:${resolved.acceptGenerated}:${resolved.generatorEnabled}:${resolved.adminKey}:${resolved.extraHosts.join(",")}:${resolved.dcPorts.join(",")}:${resolved.ephemeralSetup}`;
   if (cachedRuntime && cachedKey === cacheKey) {
     return cachedRuntime;
   }
