@@ -485,6 +485,9 @@ export function createProxyRouter(options: ProxyRouterOptions): Router {
 
       // 6. 域名白名单校验（未命中则直接返回伪装站）
       if (!hostAllowed(cfg, host)) {
+        if (urlObj.searchParams.has("bridge") || pathname === cfg.sessionPath || pathname === "/api/v1/session") {
+          logEvent("host_reject", `host=${host} allowed=${cfg.hosts.join(",") || "*"}`);
+        }
         await sendDecoy(req, res, cfg.decoyUrl);
         return;
       }

@@ -81,10 +81,22 @@ export function resolveConfig(env: NodeJS.ProcessEnv) {
   const debug = merged.DEBUG === "true" || merged.DEBUG === "1" || DEFAULT_CONFIG.debug === true;
   const decoyUrl = (typeof merged.DECOY_URL === "string" ? merged.DECOY_URL : "").trim();
 
+  const rawHostnames =
+    typeof merged.ALLOWED_HOSTS === "string" && merged.ALLOWED_HOSTS.trim()
+      ? merged.ALLOWED_HOSTS
+      : typeof merged.HOSTNAME === "string" && merged.HOSTNAME.trim()
+      ? merged.HOSTNAME
+      : "";
+
   let hostnames: string[] = [];
-  if (typeof merged.HOSTNAME === "string" && merged.HOSTNAME.trim()) {
-    hostnames = merged.HOSTNAME.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
-  } else if (Array.isArray(DEFAULT_CONFIG.hostnames)) {
+  if (rawHostnames) {
+    hostnames = rawHostnames
+      .split(",")
+      .map((s) => s.trim().toLowerCase())
+      // 忽略 Linux/Docker 自动注入的无点号主机名（如 container_id、lsd-ProgramNoodle），仅保留 * 或真实域名
+      .filter((s) => s === "*" || s.includes("."));
+  }
+  if (hostnames.length === 0 && Array.isArray(DEFAULT_CONFIG.hostnames)) {
     hostnames = DEFAULT_CONFIG.hostnames.map((s) => String(s).trim().toLowerCase()).filter(Boolean);
   }
 

@@ -48,6 +48,10 @@ EXTRA_HOSTS=""
   npm run build
   npm start
   ```
+  > 若系统自带的 Node.js 报错 `ERR_UNKNOWN_FILE_EXTENSION: Unknown file extension ".ts"`，请改用内置 `tsx` 运行生产模式：
+  ```bash
+  npm run prod
+  ```
 
 > **提示**：如果你启动时没有在 `.env` 中配置 `ADMIN_KEY`，可以直接访问 `http://127.0.0.1:3000/` 进入**可视化初始化页面**，在网页中生成并临时激活密钥（重启后失效，生产环境请务必写入 `.env`）。
 

@@ -119,6 +119,12 @@ export function StatusView({ data, adminBasePath, lang }: StatusViewProps) {
                   {data.config.decoyUrl || t.cfgDecoyBuiltin}
                 </td>
               </tr>
+              <tr>
+                <th className="py-2.5 px-5 font-medium text-slate-600">{t.cfgAllowedHosts}</th>
+                <td className="py-2.5 px-5 font-mono text-xs text-slate-900">
+                  {[...data.config.allowedHosts, ...data.config.extraHosts].filter(Boolean).join(", ") || "*"}
+                </td>
+              </tr>
             </tbody>
           </table>
         </div>
