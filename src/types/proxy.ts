@@ -45,6 +45,9 @@ export interface PanelStateData {
   proto: "https" | "http";
   currentHost: string;
   ephemeralSetup: boolean;
+  runtimePersisted?: boolean;
+  hasRuntimeOverride?: boolean;
+  baseEnvConfigured?: boolean;
   config: {
     carrier: "websocket" | "websocket-lanes";
     secretMode: "derived" | "fixed" | "none";
@@ -56,6 +59,9 @@ export interface PanelStateData {
     extraHosts: string[];
     allowedHosts: string[];
     dcPorts?: number[];
+    debug?: boolean;
+    generatorEnabled?: boolean;
+    acceptGenerated?: boolean;
   };
   hostConfigs: HostConfigEntry[];
   stats: {

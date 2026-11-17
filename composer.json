@@ -1,0 +1,22 @@
+{
+  "name": "proxygosha/workerman",
+  "description": "纯 PHP + Workerman 高性能 MTProto WebProxy，原生支持 Cloudflare Tunnel",
+  "type": "project",
+  "license": "MIT",
+  "require": {
+    "php": ">=8.1",
+    "ext-json": "*",
+    "ext-openssl": "*",
+    "ext-sockets": "*",
+    "workerman/workerman": "^4.1 || ^5.0"
+  },
+  "suggest": {
+    "ext-pcntl": "用于 Workerman 多进程管理、守护进程模式与平滑停止",
+    "ext-posix": "用于 Workerman 守护进程 PID 与进程组管理"
+  },
+  "autoload": {
+    "psr-4": {
+      "App\\": "app/"
+    }
+  }
+}

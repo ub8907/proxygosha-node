@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import type { IncomingMessage } from "node:http";
 import {
   DEFAULT_CONFIG,
@@ -60,22 +62,105 @@ export interface ProxyRuntime {
   ephemeralSetup: boolean;
 }
 
+const RUNTIME_FILE_PATH = path.resolve(process.cwd(), "storage", "runtime.json");
 let runtimeOverrideEnv: Record<string, string> | null = null;
+let runtimeFileHash: string | null = null;
+let runtimePersisted = false;
 let cachedRuntime: ProxyRuntime | null = null;
 let cachedKey: string | null = null;
 
+function reloadRuntimeFileIfChanged(): void {
+  try {
+    if (!fs.existsSync(RUNTIME_FILE_PATH)) {
+      if (runtimeFileHash !== null) {
+        runtimeFileHash = null;
+        runtimePersisted = false;
+        runtimeOverrideEnv = null;
+        cachedRuntime = null;
+        cachedKey = null;
+      }
+      return;
+    }
+    const raw = fs.readFileSync(RUNTIME_FILE_PATH, "utf8");
+    const hash = `${raw.length}:${bytesToHex(sha256(Buffer.from(raw, "utf8"))).slice(0, 16)}`;
+    if (hash === runtimeFileHash) return;
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const clean: Record<string, string> = {};
+      for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+        if (typeof v === "string") clean[k] = v;
+      }
+      runtimeOverrideEnv = clean;
+      runtimeFileHash = hash;
+      runtimePersisted = true;
+      cachedRuntime = null;
+      cachedKey = null;
+    }
+  } catch {
+    // 忽略读取异常，保留内存态配置
+  }
+}
+
 export function setRuntimeOverride(env: Record<string, string> | null): void {
   runtimeOverrideEnv = env;
+  runtimePersisted = false;
   cachedRuntime = null;
   cachedKey = null;
 }
 
+export function saveRuntimeOverride(override: Record<string, string>): boolean {
+  setRuntimeOverride(override);
+  try {
+    const dir = path.dirname(RUNTIME_FILE_PATH);
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    const raw = JSON.stringify(override, null, 2) + "\n";
+    fs.writeFileSync(RUNTIME_FILE_PATH, raw, { encoding: "utf8", mode: 0o600 });
+    runtimeFileHash = `${raw.length}:${bytesToHex(sha256(Buffer.from(raw, "utf8"))).slice(0, 16)}`;
+    runtimePersisted = true;
+    return true;
+  } catch {
+    runtimePersisted = false;
+    return false;
+  }
+}
+
+export function resetRuntimeOverride(): boolean {
+  runtimeOverrideEnv = null;
+  runtimeFileHash = null;
+  runtimePersisted = false;
+  cachedRuntime = null;
+  cachedKey = null;
+  try {
+    if (fs.existsSync(RUNTIME_FILE_PATH)) {
+      fs.unlinkSync(RUNTIME_FILE_PATH);
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function isEphemeralSetup(): boolean {
+  return runtimeOverrideEnv !== null && !runtimePersisted;
+}
+
+export function isRuntimePersisted(): boolean {
+  return runtimePersisted;
+}
+
+export function hasRuntimeOverride(): boolean {
   return runtimeOverrideEnv !== null;
 }
 
-export function resolveConfig(env: NodeJS.ProcessEnv) {
-  const merged = runtimeOverrideEnv ? { ...env, ...runtimeOverrideEnv } : env;
+export function hasBaseEnvRuntime(env: NodeJS.ProcessEnv = process.env): boolean {
+  return buildRuntime(resolveConfig(env, true)) !== null;
+}
+
+export function resolveConfig(env: NodeJS.ProcessEnv, ignoreOverride = false) {
+  if (!ignoreOverride) reloadRuntimeFileIfChanged();
+  const merged = !ignoreOverride && runtimeOverrideEnv ? { ...env, ...runtimeOverrideEnv } : env;
   const secretHex = (typeof merged.SECRET === "string" ? merged.SECRET : DEFAULT_CONFIG.secretHex || "").trim();
   const adTagHex = (typeof merged.AD_TAG === "string" ? merged.AD_TAG : DEFAULT_CONFIG.adTagHex || "").trim();
   const debug = merged.DEBUG === "true" || merged.DEBUG === "1" || DEFAULT_CONFIG.debug === true;
@@ -254,17 +339,157 @@ export function buildRuntime(cfg: ReturnType<typeof resolveConfig>): ProxyRuntim
 }
 
 export function getRuntime(env: NodeJS.ProcessEnv = process.env): ProxyRuntime | null {
+  reloadRuntimeFileIfChanged();
   const resolved = resolveConfig(env);
   const cacheKey = `${resolved.secretHex}:${resolved.generatorKey}:${resolved.hostnames.join(",")}:${resolved.adTagHex}:${resolved.decoyUrl}:${resolved.maxStreams}:${resolved.sessionPath}:${resolved.wsPath}:${resolved.debug}:${resolved.carrier}:${resolved.acceptGenerated}:${resolved.generatorEnabled}:${resolved.adminKey}:${resolved.extraHosts.join(",")}:${resolved.dcPorts.join(",")}:${resolved.ephemeralSetup}`;
   if (cachedRuntime && cachedKey === cacheKey) {
     return cachedRuntime;
   }
   const runtime = buildRuntime(resolved);
-  if (runtime) {
-    cachedRuntime = runtime;
-    cachedKey = cacheKey;
-  }
+  cachedRuntime = runtime;
+  cachedKey = cacheKey;
   return runtime;
+}
+
+export function buildOverrideFromConfigInput(
+  body: Record<string, unknown>,
+  currentCfg: ProxyRuntime,
+  env: NodeJS.ProcessEnv = process.env
+): { ok: true; override: Record<string, string> } | { ok: false; error: string } {
+  const currentResolved = resolveConfig(env);
+
+  const adminKeyRaw = typeof body.adminKey === "string" ? body.adminKey.trim() : currentCfg.adminKey;
+  if (adminKeyRaw.length < 16 || !/^[A-Za-z0-9_-]+$/.test(adminKeyRaw)) {
+    return { ok: false, error: "ADMIN_KEY must be at least 16 characters (letters, digits, - or _)." };
+  }
+
+  let secretHex = currentResolved.secretHex;
+  const secretAction = typeof body.secretAction === "string" ? body.secretAction : "keep";
+  if (secretAction === "derive") {
+    secretHex = "";
+  } else if (secretAction === "set") {
+    const rawSecret = typeof body.secret === "string" ? body.secret.trim() : "";
+    if (!parseSecret(rawSecret)) {
+      return { ok: false, error: "SECRET must be 32 hex chars or dd + 32 hex chars." };
+    }
+    secretHex = rawSecret.toLowerCase();
+  }
+
+  const carrier = body.carrier === "websocket" || body.carrier === "websocket-lanes"
+    ? body.carrier
+    : currentCfg.carrier;
+
+  const maxStreamsNum = typeof body.maxStreams === "number"
+    ? Math.trunc(body.maxStreams)
+    : parseInt(String(body.maxStreams ?? currentCfg.maxStreams), 10);
+  if (!Number.isFinite(maxStreamsNum) || maxStreamsNum < 1 || maxStreamsNum > 64) {
+    return { ok: false, error: "MAX_STREAMS must be an integer between 1 and 64." };
+  }
+
+  const allowedRaw = typeof body.allowedHosts === "string"
+    ? body.allowedHosts
+    : currentCfg.hosts.join(", ");
+  const allowedList = allowedRaw
+    .split(/[,\s]+/)
+    .map((s) => s.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/[:/].*$/, "").replace(/\.$/, ""))
+    .filter(Boolean);
+  for (const h of allowedList) {
+    if (h !== "*" && (!/^[a-z0-9.-]+$/.test(h) || h.includes("..") || !h.includes("."))) {
+      return { ok: false, error: `Invalid ALLOWED_HOSTS entry: ${h}` };
+    }
+  }
+  const allowedHostsStr = allowedList.length > 0 ? Array.from(new Set(allowedList)).join(",") : "*";
+
+  const extraRaw = typeof body.extraHosts === "string"
+    ? body.extraHosts
+    : currentCfg.extraHosts.join(", ");
+  const extraList = extraRaw
+    .split(/[,\s]+/)
+    .map((s) => s.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/[:/].*$/, "").replace(/\.$/, ""))
+    .filter(Boolean);
+  for (const h of extraList) {
+    if (!/^[a-z0-9.-]+$/.test(h) || h.includes("..")) {
+      return { ok: false, error: `Invalid EXTRA_HOSTS entry: ${h}` };
+    }
+  }
+  const extraHostsStr = Array.from(new Set(extraList)).join(",");
+
+  const decoyUrlRaw = typeof body.decoyUrl === "string" ? body.decoyUrl.trim() : currentCfg.decoyUrl;
+  if (decoyUrlRaw !== "") {
+    if (!/^https?:\/\/.+/i.test(decoyUrlRaw)) {
+      return { ok: false, error: "DECOY_URL must start with http:// or https://, or be empty." };
+    }
+    try {
+      new URL(decoyUrlRaw);
+    } catch {
+      return { ok: false, error: "DECOY_URL is not a valid URL." };
+    }
+  }
+
+  let sessionPath = typeof body.sessionPath === "string" ? body.sessionPath.trim() : currentCfg.sessionPath;
+  if (!sessionPath) sessionPath = "/api/v1/session";
+  if (!sessionPath.startsWith("/")) sessionPath = "/" + sessionPath;
+  if (!/^\/[A-Za-z0-9/_-]+$/.test(sessionPath)) {
+    return { ok: false, error: "SESSION_PATH contains invalid characters." };
+  }
+
+  let wsPath = typeof body.wsPath === "string" ? body.wsPath.trim() : currentCfg.wsPath;
+  if (!wsPath) wsPath = "/api/v1/ws";
+  if (!wsPath.startsWith("/")) wsPath = "/" + wsPath;
+  if (!/^\/[A-Za-z0-9/_-]+$/.test(wsPath)) {
+    return { ok: false, error: "WS_PATH contains invalid characters." };
+  }
+  if (wsPath === sessionPath) {
+    return { ok: false, error: "WS_PATH and SESSION_PATH must be different." };
+  }
+
+  const dcPortsRaw = typeof body.dcPorts === "string"
+    ? body.dcPorts
+    : currentCfg.dcPorts.join(",");
+  const dcPortsList = dcPortsRaw
+    .split(/[,\s]+/)
+    .map((v) => parseInt(v.trim(), 10))
+    .filter((n) => Number.isFinite(n) && n >= 1 && n <= 65535);
+  if (dcPortsList.length === 0) {
+    return { ok: false, error: "DC_PORTS must contain at least one valid port (1–65535)." };
+  }
+  const dcPortsStr = Array.from(new Set(dcPortsList)).join(",");
+
+  let adTagHex = currentResolved.adTagHex;
+  const adTagAction = typeof body.adTagAction === "string" ? body.adTagAction : "keep";
+  if (adTagAction === "clear") {
+    adTagHex = "";
+  } else if (adTagAction === "set") {
+    const rawTag = typeof body.adTag === "string" ? body.adTag.trim() : "";
+    if (!parseAdTag(rawTag)) {
+      return { ok: false, error: "AD_TAG must be exactly 32 hexadecimal characters." };
+    }
+    adTagHex = rawTag.toLowerCase();
+  }
+
+  const debugFlag = typeof body.debug === "boolean" ? body.debug : currentCfg.debug;
+  const generatorEnabled = typeof body.generatorEnabled === "boolean" ? body.generatorEnabled : currentCfg.generatorEnabled;
+  const acceptGenerated = typeof body.acceptGenerated === "boolean" ? body.acceptGenerated : currentCfg.acceptGenerated;
+
+  return {
+    ok: true,
+    override: {
+      ADMIN_KEY: adminKeyRaw,
+      SECRET: secretHex,
+      CARRIER: carrier,
+      MAX_STREAMS: String(maxStreamsNum),
+      ALLOWED_HOSTS: allowedHostsStr,
+      EXTRA_HOSTS: extraHostsStr,
+      DECOY_URL: decoyUrlRaw,
+      SESSION_PATH: sessionPath,
+      WS_PATH: wsPath,
+      DC_PORTS: dcPortsStr,
+      AD_TAG: adTagHex,
+      DEBUG: debugFlag ? "true" : "false",
+      GENERATOR_ENABLED: generatorEnabled ? "true" : "false",
+      ACCEPT_GENERATED: acceptGenerated ? "true" : "false",
+    },
+  };
 }
 
 export function rawRequestAuthority(req: IncomingMessage): string {
@@ -341,37 +566,61 @@ export function deriveSecret(cfg: ProxyRuntime, label: string): Buffer | null {
   return mac.subarray(0, 16);
 }
 
-export function bridgeMode(cfg: ProxyRuntime, host: string, capability: string, port: string): number {
+export function bridgeMode(
+  cfg: ProxyRuntime,
+  host: string,
+  capability: string,
+  port: string,
+  extraHeaderHosts: string[] = []
+): number {
   const provided = b64uDecodeStrict(capability);
   if (!provided || provided.length !== 32) return -1;
+
+  // 合并待校验域名：当前请求 Host + X-Original-Host/原始 Host + EXTRA_HOSTS + 白名单中的具体域名（适配 CDN 回源重写 Host 的加速域名场景）
+  const baseHosts: string[] = [];
+  const pushHost = (h: string) => {
+    const clean = h.trim().toLowerCase().replace(/\.$/, "").replace(/:[0-9]+$/, "");
+    if (clean && clean !== "*" && clean !== "proxy.example.com" && !baseHosts.includes(clean)) {
+      baseHosts.push(clean);
+    }
+  };
+  pushHost(host);
+  for (const h of extraHeaderHosts) pushHost(h);
+  for (const h of cfg.extraHosts) pushHost(h);
+  for (const h of cfg.hosts) pushHost(h);
 
   const incomingPort = port ? parseInt(port, 10) : 443;
   const isKnownPort = (HTTPS_PORTS as readonly number[]).includes(incomingPort);
 
-  if (isKnownPort && cfg.portSecrets[incomingPort]) {
-    const pKeys = cfg.portSecrets[incomingPort].keys;
-    const contexts = incomingPort === 443
-      ? [Buffer.from("tdesktop-web-proxy-bridge-v1\n" + host, "utf8")]
-      : [
-          Buffer.from(`tdesktop-web-proxy-bridge-v1\n${host}:${incomingPort}`, "utf8"),
-          Buffer.from("tdesktop-web-proxy-bridge-v1\n" + host, "utf8"),
-        ];
-    for (const ctx of contexts) {
-      for (const key of pKeys) {
-        if (hmacVerify(key, provided, ctx)) {
-          return PORT_MODE_BASE + (HTTPS_PORTS as readonly number[]).indexOf(incomingPort);
+  for (const candidateHost of baseHosts) {
+    if (isKnownPort && cfg.portSecrets[incomingPort]) {
+      const pKeys = cfg.portSecrets[incomingPort].keys;
+      const contexts = incomingPort === 443
+        ? [Buffer.from("tdesktop-web-proxy-bridge-v1\n" + candidateHost, "utf8")]
+        : [
+            Buffer.from(`tdesktop-web-proxy-bridge-v1\n${candidateHost}:${incomingPort}`, "utf8"),
+            Buffer.from("tdesktop-web-proxy-bridge-v1\n" + candidateHost, "utf8"),
+          ];
+      for (const ctx of contexts) {
+        for (const key of pKeys) {
+          if (hmacVerify(key, provided, ctx)) {
+            return PORT_MODE_BASE + (HTTPS_PORTS as readonly number[]).indexOf(incomingPort);
+          }
         }
       }
     }
   }
 
-  const candidateHosts = [host];
+  const candidateHosts: string[] = [];
   const candidatePorts: string[] = [];
   if (port && port !== "443" && port !== "80") candidatePorts.push(port);
   for (const p of HTTPS_PORTS) {
     if (p !== 443 && !candidatePorts.includes(String(p))) candidatePorts.push(String(p));
   }
-  for (const p of candidatePorts) candidateHosts.push(`${host}:${p}`);
+  for (const h of baseHosts) {
+    candidateHosts.push(h);
+    for (const p of candidatePorts) candidateHosts.push(`${h}:${p}`);
+  }
 
   for (const h of candidateHosts) {
     const context = Buffer.from("tdesktop-web-proxy-bridge-v1\n" + h, "utf8");
@@ -383,20 +632,22 @@ export function bridgeMode(cfg: ProxyRuntime, host: string, capability: string, 
   }
 
   if (cfg.portSecrets) {
-    for (let idx = 0; idx < HTTPS_PORTS.length; idx++) {
-      const p = HTTPS_PORTS[idx];
-      if (p === incomingPort) continue;
-      const pKeys = cfg.portSecrets[p]?.keys;
-      if (!pKeys) continue;
-      const contexts = [
-        Buffer.from(`tdesktop-web-proxy-bridge-v1\n${host}:${p}`, "utf8"),
-        Buffer.from("tdesktop-web-proxy-bridge-v1\n" + host, "utf8"),
-      ];
-      for (const ctx of contexts) {
-        for (const key of pKeys) {
-          if (hmacVerify(key, provided, ctx)) {
-            if (!port || port === "443" || port === String(p)) {
-              return PORT_MODE_BASE + idx;
+    for (const candidateHost of baseHosts) {
+      for (let idx = 0; idx < HTTPS_PORTS.length; idx++) {
+        const p = HTTPS_PORTS[idx];
+        if (p === incomingPort && candidateHost === host) continue;
+        const pKeys = cfg.portSecrets[p]?.keys;
+        if (!pKeys) continue;
+        const contexts = [
+          Buffer.from(`tdesktop-web-proxy-bridge-v1\n${candidateHost}:${p}`, "utf8"),
+          Buffer.from("tdesktop-web-proxy-bridge-v1\n" + candidateHost, "utf8"),
+        ];
+        for (const ctx of contexts) {
+          for (const key of pKeys) {
+            if (hmacVerify(key, provided, ctx)) {
+              if (!port || port === "443" || port === String(p)) {
+                return PORT_MODE_BASE + idx;
+              }
             }
           }
         }
@@ -410,7 +661,7 @@ export function bridgeMode(cfg: ProxyRuntime, host: string, capability: string, 
       const context = Buffer.from("tdesktop-web-proxy-bridge-v1\n" + h, "utf8");
       const secret = deriveSecret(cfg, h);
       if (secret && hmacVerify(secret, provided, context)) {
-        return index === 0 ? 1 : 2;
+        return h.includes(":") ? 2 : 1;
       }
     }
   }
@@ -440,7 +691,7 @@ export function verifyToken(cfg: ProxyRuntime, token: string, kind: number): { n
   return { nonce, mode: nonce[4] };
 }
 
-export function panelRoute(pathname: string, searchParams: URLSearchParams, cfg: ProxyRuntime): "panel" | "status" | "api-state" | "api-probe" | null {
+export function panelRoute(pathname: string, searchParams: URLSearchParams, cfg: ProxyRuntime): "panel" | "status" | "config" | "api-state" | "api-probe" | "api-config" | null {
   if (!cfg.adminKey) return null;
   let path = "";
   try {
@@ -451,8 +702,10 @@ export function panelRoute(pathname: string, searchParams: URLSearchParams, cfg:
   if (path.endsWith("/")) path = path.slice(0, -1);
   if (path && safeEqual(path, cfg.adminKey)) return "panel";
   if (path && safeEqual(path, cfg.adminKey + "/status")) return "status";
+  if (path && safeEqual(path, cfg.adminKey + "/config")) return "config";
   if (path && safeEqual(path, cfg.adminKey + "/api/state")) return "api-state";
   if (path && safeEqual(path, cfg.adminKey + "/api/probe")) return "api-probe";
+  if (path && safeEqual(path, cfg.adminKey + "/api/config")) return "api-config";
   if (generatorLabel(searchParams) === "" && safeEqual(searchParams.get("key") || "", cfg.adminKey)) {
     return "panel";
   }

@@ -10,7 +10,14 @@ import { sendDecoy } from "./src/proxy/templates.ts";
 import { reportError } from "./src/proxy/telemetry.ts";
 import { startTunnelIfConfigured, stopTunnel } from "./src/proxy/tunnel.ts";
 
-const PORT = parseInt(process.env.PORT || "3000", 10) || 3000;
+const isDevCommand =
+  Boolean(process.env.npm_lifecycle_event?.includes("dev")) ||
+  process.execArgv.some((arg) => arg.includes("tsx")) ||
+  Boolean(process.env._?.includes("tsx"));
+
+const PORT =
+  parseInt(process.env.PROXY_PORT || "", 10) ||
+  (isDevCommand ? 3000 : parseInt(process.env.PORT || "3000", 10) || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
 
 async function bootstrapServer() {
@@ -22,10 +29,6 @@ async function bootstrapServer() {
   const rootDir = process.cwd();
   const distDir = path.resolve(rootDir, "dist");
   const distIndexPath = path.join(distDir, "index.html");
-  const isDevCommand =
-    Boolean(process.env.npm_lifecycle_event?.includes("dev")) ||
-    process.execArgv.some((arg) => arg.includes("tsx")) ||
-    Boolean(process.env._?.includes("tsx"));
   const isProd =
     process.env.NODE_ENV === "production" ||
     (!isDevCommand && fs.existsSync(distIndexPath));

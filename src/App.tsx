@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { RefreshCw } from "lucide-react";
+import { ConfigView } from "./components/ConfigView.tsx";
 import { PanelView } from "./components/PanelView.tsx";
 import { SetupView } from "./components/SetupView.tsx";
 import { StatusView } from "./components/StatusView.tsx";
@@ -8,9 +9,9 @@ import type { Lang } from "./proxy/i18n.ts";
 import { TRANSLATIONS } from "./proxy/i18n.ts";
 import type { PanelStateData, SetupStatusData } from "./types/proxy.ts";
 
-type ActiveTab = "panel" | "status" | "tunnel";
+type ActiveTab = "panel" | "status" | "config" | "tunnel";
 
-// 根据当前浏览器路径解析视图模式（初始化页 / 管理面板 / 状态探测）
+// 根据当前浏览器路径解析视图模式（初始化页 / 管理面板 / 状态探测 / 运行配置）
 function parseLocation(): { mode: "setup" | "admin"; adminBasePath: string; tab: ActiveTab } {
   const path = window.location.pathname.replace(/\/+$/, "") || "/";
   if (path === "/" || path === "/setup") {
@@ -19,6 +20,9 @@ function parseLocation(): { mode: "setup" | "admin"; adminBasePath: string; tab:
   const parts = path.slice(1).split("/");
   if (parts.length >= 2 && parts[1] === "status") {
     return { mode: "admin", adminBasePath: "/" + parts[0], tab: "status" };
+  }
+  if (parts.length >= 2 && parts[1] === "config") {
+    return { mode: "admin", adminBasePath: "/" + parts[0], tab: "config" };
   }
   return { mode: "admin", adminBasePath: "/" + parts[0], tab: "panel" };
 }
@@ -76,7 +80,11 @@ export default function App() {
   const navigateTab = (tab: ActiveTab) => {
     if (route.mode !== "admin") return;
     const nextUrl =
-      tab === "status" ? `${route.adminBasePath}/status` : route.adminBasePath;
+      tab === "status"
+        ? `${route.adminBasePath}/status`
+        : tab === "config"
+        ? `${route.adminBasePath}/config`
+        : route.adminBasePath;
     if (window.location.pathname !== nextUrl) {
       window.history.pushState(null, "", nextUrl);
     }
@@ -87,6 +95,16 @@ export default function App() {
   const handleActivated = (panelPath: string) => {
     window.history.pushState(null, "", panelPath);
     setRoute({ mode: "admin", adminBasePath: panelPath, tab: "panel" });
+  };
+
+  // 动态保存配置后同步最新状态并在 ADMIN_KEY 变更时自动更新路径
+  const handleConfigSaved = (nextAdminBasePath: string, nextState: PanelStateData) => {
+    setPanelData(nextState);
+    if (nextAdminBasePath !== route.adminBasePath) {
+      const nextUrl = `${nextAdminBasePath}/config`;
+      window.history.replaceState(null, "", nextUrl);
+      setRoute({ mode: "admin", adminBasePath: nextAdminBasePath, tab: "config" });
+    }
   };
 
   const t = TRANSLATIONS[lang];
@@ -134,6 +152,17 @@ export default function App() {
                   }`}
                 >
                   {t.navStatus}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => navigateTab("config")}
+                  className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                    route.tab === "config"
+                      ? "text-slate-950 font-semibold border-b-2 border-blue-600"
+                      : "hover:text-slate-900"
+                  }`}
+                >
+                  {t.navConfig}
                 </button>
                 <button
                   type="button"
@@ -200,6 +229,14 @@ export default function App() {
               data={panelData}
               adminBasePath={route.adminBasePath}
               lang={lang}
+              onOpenConfig={() => navigateTab("config")}
+            />
+          ) : route.tab === "config" ? (
+            <ConfigView
+              data={panelData}
+              adminBasePath={route.adminBasePath}
+              lang={lang}
+              onConfigSaved={handleConfigSaved}
             />
           ) : route.tab === "tunnel" ? (
             <TunnelGuide

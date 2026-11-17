@@ -14,17 +14,22 @@ import {
 } from "./crypto.ts";
 import {
   bridgeMode,
+  buildOverrideFromConfigInput,
   deriveSecret,
   generatorLabel,
   getRuntime,
+  hasBaseEnvRuntime,
+  hasRuntimeOverride,
   hostAllowed,
   isEphemeralSetup,
+  isRuntimePersisted,
   issueToken,
   panelRoute,
   requestHost,
   requestPort,
   requestProto,
-  setRuntimeOverride,
+  resetRuntimeOverride,
+  saveRuntimeOverride,
   verifyToken,
   type ProxyRuntime,
 } from "./config.ts";
@@ -232,6 +237,9 @@ function buildPanelStatePayload(cfg: ProxyRuntime, host: string, proto: "https" 
     proto,
     currentHost: host,
     ephemeralSetup: isEphemeralSetup(),
+    runtimePersisted: isRuntimePersisted(),
+    hasRuntimeOverride: hasRuntimeOverride(),
+    baseEnvConfigured: hasBaseEnvRuntime(),
     config: {
       carrier: cfg.carrier,
       secretMode: cfg.secretDerived ? "derived" : cfg.base ? "fixed" : "none",
@@ -243,6 +251,9 @@ function buildPanelStatePayload(cfg: ProxyRuntime, host: string, proto: "https" 
       extraHosts: cfg.extraHosts,
       allowedHosts: cfg.hosts,
       dcPorts: cfg.dcPorts,
+      debug: cfg.debug,
+      generatorEnabled: cfg.generatorEnabled,
+      acceptGenerated: cfg.acceptGenerated,
     },
     hostConfigs,
     stats: {
@@ -335,10 +346,10 @@ export function createProxyRouter(options: ProxyRouterOptions): Router {
       override.EXTRA_HOSTS = body.extraHosts.trim();
     }
 
-    setRuntimeOverride(override);
+    saveRuntimeOverride(override);
     const nextCfg = getRuntime();
     if (!nextCfg) {
-      setRuntimeOverride(null);
+      resetRuntimeOverride();
       res.status(400).json({ error: "Failed to initialize runtime with supplied configuration." });
       return;
     }
@@ -396,7 +407,7 @@ export function createProxyRouter(options: ProxyRouterOptions): Router {
         return;
       }
 
-      // 3. 管理面板与状态探测路由：/<ADMIN_KEY>、/<ADMIN_KEY>/status、/<ADMIN_KEY>/api/*
+      // 3. 管理面板、动态配置与状态探测路由：/<ADMIN_KEY>、/<ADMIN_KEY>/status、/<ADMIN_KEY>/config、/<ADMIN_KEY>/api/*
       const route = panelRoute(pathname, urlObj.searchParams, cfg);
       if (route === "api-state" && req.method === "GET") {
         res.status(200).setHeader("Cache-Control", "no-store").json(buildPanelStatePayload(cfg, host, proto));
@@ -407,7 +418,62 @@ export function createProxyRouter(options: ProxyRouterOptions): Router {
         res.status(200).setHeader("Content-Type", "application/json; charset=utf-8").setHeader("Cache-Control", "no-store").json({ results });
         return;
       }
-      if ((route === "panel" || route === "status") && req.method === "GET") {
+      if (route === "api-config" && req.method === "POST") {
+        await new Promise<void>((resolve) => {
+          express.json({ limit: "16kb" })(req, res, () => resolve());
+        });
+        const body = (req.body && typeof req.body === "object" ? req.body : {}) as Record<string, unknown>;
+        if (body.action === "reset") {
+          if (!hasBaseEnvRuntime()) {
+            res.status(400).json({ error: "Cannot reset: .env / environment has no base ADMIN_KEY or SECRET." });
+            return;
+          }
+          resetRuntimeOverride();
+          const nextCfg = getRuntime();
+          if (!nextCfg) {
+            res.status(400).json({ error: "Failed to reload base environment configuration." });
+            return;
+          }
+          logEvent("config_reset", "reverted to .env defaults");
+          const basePath = "/" + encodeURIComponent(nextCfg.adminKey);
+          res.status(200).setHeader("Cache-Control", "no-store").json({
+            ok: true,
+            adminKeyChanged: nextCfg.adminKey !== cfg.adminKey,
+            panelPath: basePath,
+            statusPath: basePath + "/status",
+            configPath: basePath + "/config",
+            state: buildPanelStatePayload(nextCfg, host, proto),
+          });
+          return;
+        }
+
+        const built = buildOverrideFromConfigInput(body, cfg);
+        if (!built.ok) {
+          res.status(400).json({ error: built.error });
+          return;
+        }
+        saveRuntimeOverride(built.override);
+        const nextCfg = getRuntime();
+        if (!nextCfg) {
+          res.status(400).json({ error: "Failed to apply configuration update." });
+          return;
+        }
+        logEvent(
+          "config_update",
+          `carrier=${nextCfg.carrier} maxStreams=${nextCfg.maxStreams} extra=${nextCfg.extraHosts.join(",") || "-"}`
+        );
+        const basePath = "/" + encodeURIComponent(nextCfg.adminKey);
+        res.status(200).setHeader("Cache-Control", "no-store").json({
+          ok: true,
+          adminKeyChanged: nextCfg.adminKey !== cfg.adminKey,
+          panelPath: basePath,
+          statusPath: basePath + "/status",
+          configPath: basePath + "/config",
+          state: buildPanelStatePayload(nextCfg, host, proto),
+        });
+        return;
+      }
+      if ((route === "panel" || route === "status" || route === "config") && req.method === "GET") {
         if (route === "panel") STATS.panelViews++;
         if (route === "status") STATS.statusViews++;
         res.setHeader("Cache-Control", "no-store");
@@ -505,7 +571,11 @@ export function createProxyRouter(options: ProxyRouterOptions): Router {
           sendNotFound(res);
           return;
         }
-        const mode = bridgeMode(cfg, host, rawBridge[0], port);
+        const headerHosts = [
+          typeof req.headers.host === "string" ? req.headers.host : "",
+          typeof req.headers["x-original-host"] === "string" ? req.headers["x-original-host"] : "",
+        ].filter(Boolean);
+        const mode = bridgeMode(cfg, host, rawBridge[0], port, headerHosts);
         if (mode < 0) {
           logEvent("bridge_reject", `host=${host} port=${port || "443"} reason=secret_mismatch`);
           sendNotFound(res);

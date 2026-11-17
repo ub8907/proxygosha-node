@@ -8,10 +8,11 @@ interface StatusViewProps {
   data: PanelStateData;
   adminBasePath: string;
   lang: Lang;
+  onOpenConfig?: () => void;
 }
 
 // 运行状态监控、Cloudflare 隧道统计与 Telegram DC 实时 TCP 探测面板
-export function StatusView({ data, adminBasePath, lang }: StatusViewProps) {
+export function StatusView({ data, adminBasePath, lang, onOpenConfig }: StatusViewProps) {
   const t = TRANSLATIONS[lang];
   const [probing, setProbing] = useState(false);
   const [probeResults, setProbeResults] = useState<ProbeResultData[] | null>(null);
@@ -88,8 +89,17 @@ export function StatusView({ data, adminBasePath, lang }: StatusViewProps) {
       {/* 运行配置与 Cloudflare 隧道状态双栏表格 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-          <div className="px-5 py-3.5 border-b border-slate-200 font-semibold text-sm text-slate-900">
-            {t.configSection}
+          <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between gap-3">
+            <span className="font-semibold text-sm text-slate-900">{t.configSection}</span>
+            {onOpenConfig && (
+              <button
+                type="button"
+                onClick={onOpenConfig}
+                className="text-xs font-medium text-blue-600 hover:text-blue-700 hover:underline whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                {t.editConfigBtn}
+              </button>
+            )}
           </div>
           <table className="w-full text-left border-collapse text-sm">
             <tbody className="divide-y divide-slate-200">
@@ -123,6 +133,12 @@ export function StatusView({ data, adminBasePath, lang }: StatusViewProps) {
                 <th className="py-2.5 px-5 font-medium text-slate-600">{t.cfgAllowedHosts}</th>
                 <td className="py-2.5 px-5 font-mono text-xs text-slate-900">
                   {[...data.config.allowedHosts, ...data.config.extraHosts].filter(Boolean).join(", ") || "*"}
+                </td>
+              </tr>
+              <tr>
+                <th className="py-2.5 px-5 font-medium text-slate-600">DC_PORTS</th>
+                <td className="py-2.5 px-5 font-mono tabular-nums text-xs text-slate-900">
+                  {(data.config.dcPorts || [443, 80, 5222]).join(", ")}
                 </td>
               </tr>
             </tbody>

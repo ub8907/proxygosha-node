@@ -664,11 +664,25 @@ export function serveBridge(req: Request, res: Response, cfg: ProxyRuntime, host
     .replaceAll("__WS_PATH__", JSON.stringify(cfg.wsPath.replace(/^\//, "")));
 
   const wsProto = proto === "http" ? "ws" : "wss";
+  const cspHosts = [host, ...cfg.extraHosts, ...cfg.hosts]
+    .map((h) => h.trim().toLowerCase())
+    .filter((h, i, arr) => h && h !== "*" && h !== "proxy.example.com" && arr.indexOf(h) === i);
+  const connectSources = cspHosts.flatMap((h) => [
+    `${proto}://${h}:*`,
+    `${wsProto}://${h}:*`,
+    `${proto}://${h}`,
+    `${wsProto}://${h}`,
+    `https://${h}:*`,
+    `wss://${h}:*`,
+    `https://${h}`,
+    `wss://${h}`,
+  ]);
+
   const csp = [
     "default-src 'none'",
     "base-uri 'none'",
     "child-src 'none'",
-    `connect-src 'self' ${proto}://${host}:* ${wsProto}://${host}:* ${proto}://${host} ${wsProto}://${host} https://${host}:* wss://${host}:* https://${host} wss://${host}`,
+    `connect-src 'self' ${connectSources.join(" ")}`,
     "font-src 'none'",
     "form-action 'none'",
     "frame-ancestors http://127.0.0.1:*",

@@ -1,20 +1,20 @@
-FROM node:22-alpine AS builder
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-RUN npm run build
+FROM php:8.3-fpm-alpine
 
-FROM node:22-alpine AS runner
+RUN apk add --no-cache linux-headers \
+    && docker-php-ext-install sockets pcntl
+
+COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+
 WORKDIR /app
-ENV NODE_ENV=production
-ENV PORT=3000
-ENV HOST=0.0.0.0
-COPY package*.json ./
-RUN npm ci --omit=dev
-COPY --from=builder /app/dist ./dist
-COPY --from=builder /app/server.ts ./server.ts
-COPY --from=builder /app/src ./src
-COPY --from=builder /app/tsconfig.json ./tsconfig.json
-EXPOSE 3000
-CMD ["node", "server.ts"]
+
+COPY composer.json ./
+RUN composer install --no-dev --no-interaction --optimize-autoloader
+
+COPY start.php index.php ./
+COPY app ./app
+COPY public ./public
+
+RUN mkdir -p /app/storage && chown -R www-data:www-data /app/storage
+
+EXPOSE 9000
+CMD ["php-fpm"]
