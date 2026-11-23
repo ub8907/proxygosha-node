@@ -11,7 +11,7 @@ interface StatusViewProps {
   onOpenConfig?: () => void;
 }
 
-// 运行状态监控、Cloudflare 隧道统计与 Telegram DC 实时 TCP 探测面板
+// 运行状态监控与 Telegram DC 实时 TCP 探测面板
 export function StatusView({ data, adminBasePath, lang, onOpenConfig }: StatusViewProps) {
   const t = TRANSLATIONS[lang];
   const [probing, setProbing] = useState(false);
@@ -81,14 +81,13 @@ export function StatusView({ data, adminBasePath, lang, onOpenConfig }: StatusVi
             {data.stats.uptimeFormatted}
           </div>
           <div className="mt-1 text-xs text-slate-500 font-mono tabular-nums">
-            {t.cfTunnelHitsLabel}: {data.tunnel.requestsViaTunnel}
+            {t.cfgCarrier}: {data.config.carrier}
           </div>
         </div>
       </div>
 
-      {/* 运行配置与 Cloudflare 隧道状态双栏表格 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
+      {/* 运行配置表格 */}
+      <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
           <div className="px-5 py-3.5 border-b border-slate-200 flex items-center justify-between gap-3">
             <span className="font-semibold text-sm text-slate-900">{t.configSection}</span>
             {onOpenConfig && (
@@ -143,61 +142,6 @@ export function StatusView({ data, adminBasePath, lang, onOpenConfig }: StatusVi
               </tr>
             </tbody>
           </table>
-        </div>
-
-        <div className="bg-white border border-slate-200 rounded-lg overflow-hidden">
-          <div className="px-5 py-3.5 border-b border-slate-200 font-semibold text-sm text-slate-900">
-            {t.tunnelSection}
-          </div>
-          <table className="w-full text-left border-collapse text-sm">
-            <tbody className="divide-y divide-slate-200">
-              <tr>
-                <th className="py-2.5 px-5 font-medium text-slate-600 w-44">
-                  {t.tunnelRequestsLabel}
-                </th>
-                <td className="py-2.5 px-5 font-mono tabular-nums text-slate-900">
-                  {data.tunnel.requestsViaTunnel}
-                </td>
-              </tr>
-              <tr>
-                <th className="py-2.5 px-5 font-medium text-slate-600">
-                  {t.tunnelLastHostLabel}
-                </th>
-                <td className="py-2.5 px-5 font-mono text-slate-900">
-                  {data.tunnel.lastTunnelHost || "-"}
-                </td>
-              </tr>
-              <tr>
-                <th className="py-2.5 px-5 font-medium text-slate-600">
-                  {t.tunnelLastRayLabel}
-                </th>
-                <td className="py-2.5 px-5 font-mono text-slate-900">
-                  {data.tunnel.lastRayColo || "-"}
-                </td>
-              </tr>
-              <tr>
-                <th className="py-2.5 px-5 font-medium text-slate-600">
-                  {t.tunnelSidecarLabel}
-                </th>
-                <td className="py-2.5 px-5 text-slate-900">
-                  {data.tunnel.running
-                    ? `${t.tunnelProcessRunning} (PID ${data.tunnel.pid ?? "-"})`
-                    : data.tunnel.binaryAvailable
-                    ? t.tunnelInstalledExternal
-                    : t.tunnelExternal}
-                </td>
-              </tr>
-              <tr>
-                <th className="py-2.5 px-5 font-medium text-slate-600">
-                  {t.tunnelLastErrLabel}
-                </th>
-                <td className="py-2.5 px-5 font-mono text-xs text-slate-600">
-                  {data.tunnel.lastError || t.noneText}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
       </div>
 
       {((data.stats.dcEmptyCloses ?? 0) > 0 ||

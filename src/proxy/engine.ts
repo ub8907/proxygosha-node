@@ -25,7 +25,6 @@ import {
   type ProxyRuntime,
 } from "./config.ts";
 import { fmtBytes, fmtDuration, logEvent, reportError, STATS } from "./telemetry.ts";
-import { recordTunnelHeaders } from "./tunnel.ts";
 
 export interface ProbeAltPortResult {
   port: number;
@@ -749,7 +748,6 @@ export function attachWebSocketServer(
 
       const host = requestHost(req);
       const port = requestPort(req);
-      recordTunnelHeaders(req, host);
 
       if (!hostAllowed(cfg, host)) {
         STATS.wsRejects++;

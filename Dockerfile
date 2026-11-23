@@ -1,20 +1,13 @@
-FROM php:8.3-fpm-alpine
-
-RUN apk add --no-cache linux-headers \
-    && docker-php-ext-install sockets pcntl
-
-COPY --from=composer:2 /usr/bin/composer /usr/bin/composer
+FROM node:22-alpine
 
 WORKDIR /app
 
-COPY composer.json ./
-RUN composer install --no-dev --no-interaction --optimize-autoloader
+COPY package.json package-lock.json* ./
+RUN if [ -f package-lock.json ]; then npm ci; else npm install; fi
 
-COPY start.php index.php ./
-COPY app ./app
-COPY public ./public
+COPY . .
+RUN npm run build && mkdir -p /app/storage
 
-RUN mkdir -p /app/storage && chown -R www-data:www-data /app/storage
-
-EXPOSE 9000
-CMD ["php-fpm"]
+ENV NODE_ENV=production
+EXPOSE 3000
+CMD ["node", "dist-server/server.mjs"]

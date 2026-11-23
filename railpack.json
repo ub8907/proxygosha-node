@@ -1,0 +1,13 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "packages": {
+    "node": "22"
+  },
+  "deploy": {
+    "variables": {
+      "NODE_ENV": "production",
+      "RAILPACK_NO_SPA": "1"
+    },
+    "startCommand": "node dist-server/server.mjs"
+  }
+}

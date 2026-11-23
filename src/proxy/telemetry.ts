@@ -19,9 +19,6 @@ export const STATS = {
   wsRejects: 0,
   panelViews: 0,
   statusViews: 0,
-  tunnelRequests: 0,
-  lastTunnelRay: "",
-  lastTunnelHost: "",
 };
 
 const LOG_LIMIT = 150;

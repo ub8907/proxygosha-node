@@ -36,7 +36,6 @@ import {
 import { probeDcs } from "./engine.ts";
 import { sendDecoy, serveBridge } from "./templates.ts";
 import { fmtBytes, fmtDuration, LOG, logEvent, PROCESS_START, STATS } from "./telemetry.ts";
-import { getTunnelStatus, recordTunnelHeaders } from "./tunnel.ts";
 
 export interface ProxyRouterOptions {
   serveSpa: (req: Request, res: Response) => Promise<void>;
@@ -274,7 +273,6 @@ function buildPanelStatePayload(cfg: ProxyRuntime, host: string, proto: "https" 
       uptimeMs: Date.now() - PROCESS_START,
       uptimeFormatted: fmtDuration(Date.now() - PROCESS_START),
     },
-    tunnel: getTunnelStatus(),
     logs: LOG.slice(-60).reverse(),
   };
 }
@@ -310,7 +308,6 @@ export function createProxyRouter(options: ProxyRouterOptions): Router {
       proto,
       adminKeyTooShort: currentKey.length > 0 && currentKey.length < 16,
       suggestedKey,
-      tunnel: getTunnelStatus(),
       version: VERSION,
     });
   });
@@ -368,21 +365,12 @@ export function createProxyRouter(options: ProxyRouterOptions): Router {
       const host = requestHost(req);
       const port = requestPort(req);
       const proto = requestProto(req);
-      recordTunnelHeaders(req, host);
 
       const urlObj = new URL(req.originalUrl, `${proto}://${host || "localhost"}`);
       const pathname = urlObj.pathname;
 
-      // 放行 Vite 开发资源与打包后的静态资源，确保管理/初始化页面正常加载
-      if (
-        pathname.startsWith("/src/") ||
-        pathname.startsWith("/assets/") ||
-        pathname.startsWith("/@vite") ||
-        pathname.startsWith("/@react-refresh") ||
-        pathname.startsWith("/node_modules/") ||
-        pathname.startsWith("/@id/") ||
-        pathname.startsWith("/@fs/")
-      ) {
+      // 放行前端静态构建资源，确保管理/初始化页面正常加载
+      if (pathname.startsWith("/assets/")) {
         next();
         return;
       }

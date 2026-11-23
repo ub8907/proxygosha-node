@@ -1,7 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { RefreshCw, ArrowRight } from "lucide-react";
 import { CopyButton } from "./CopyButton.tsx";
-import { TunnelGuide } from "./TunnelGuide.tsx";
 import type { Lang } from "../proxy/i18n.ts";
 import { TRANSLATIONS } from "../proxy/i18n.ts";
 import type { SetupStatusData } from "../types/proxy.ts";
@@ -92,11 +91,10 @@ export function SetupView({ data, lang, onActivated }: SetupViewProps) {
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-        <form
-          onSubmit={handleSubmit}
-          className="lg:col-span-6 bg-white border border-slate-200 rounded-lg p-6 space-y-5"
-        >
+      <form
+        onSubmit={handleSubmit}
+        className="max-w-2xl bg-white border border-slate-200 rounded-lg p-6 space-y-5"
+      >
           <div className="space-y-1.5">
             <label className="block text-sm font-medium text-slate-800">{t.adminKeyLabel}</label>
             <div className="flex gap-2">
@@ -197,11 +195,6 @@ export function SetupView({ data, lang, onActivated }: SetupViewProps) {
             </pre>
           </div>
         </form>
-
-        <div className="lg:col-span-6">
-          <TunnelGuide lang={lang} host={data.host} tunnel={data.tunnel} />
-        </div>
-      </div>
     </div>
   );
 }

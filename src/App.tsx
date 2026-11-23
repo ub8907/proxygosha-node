@@ -4,12 +4,11 @@ import { ConfigView } from "./components/ConfigView.tsx";
 import { PanelView } from "./components/PanelView.tsx";
 import { SetupView } from "./components/SetupView.tsx";
 import { StatusView } from "./components/StatusView.tsx";
-import { TunnelGuide } from "./components/TunnelGuide.tsx";
 import type { Lang } from "./proxy/i18n.ts";
 import { TRANSLATIONS } from "./proxy/i18n.ts";
 import type { PanelStateData, SetupStatusData } from "./types/proxy.ts";
 
-type ActiveTab = "panel" | "status" | "config" | "tunnel";
+type ActiveTab = "panel" | "status" | "config";
 
 // 根据当前浏览器路径解析视图模式（初始化页 / 管理面板 / 状态探测 / 运行配置）
 function parseLocation(): { mode: "setup" | "admin"; adminBasePath: string; tab: ActiveTab } {
@@ -164,17 +163,6 @@ export default function App() {
                 >
                   {t.navConfig}
                 </button>
-                <button
-                  type="button"
-                  onClick={() => navigateTab("tunnel")}
-                  className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                    route.tab === "tunnel"
-                      ? "text-slate-950 font-semibold border-b-2 border-blue-600"
-                      : "hover:text-slate-900"
-                  }`}
-                >
-                  {t.navTunnel}
-                </button>
               </>
             ) : (
               <span className="text-slate-500 whitespace-nowrap shrink-0">{t.navSetup}</span>
@@ -237,12 +225,6 @@ export default function App() {
               adminBasePath={route.adminBasePath}
               lang={lang}
               onConfigSaved={handleConfigSaved}
-            />
-          ) : route.tab === "tunnel" ? (
-            <TunnelGuide
-              lang={lang}
-              host={panelData.currentHost}
-              tunnel={panelData.tunnel}
             />
           ) : (
             <PanelView data={panelData} lang={lang} />

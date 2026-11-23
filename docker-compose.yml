@@ -1,51 +1,18 @@
 services:
-  php-fpm:
+  proxygosha:
     build: .
-    container_name: proxygosha-fpm
+    container_name: proxygosha-node
     restart: unless-stopped
     env_file:
       - .env
     environment:
-      - WORKERMAN_INTERNAL_URL=http://workerman:3001
-    volumes:
-      - proxygosha_storage:/app/storage
-
-  workerman:
-    build: .
-    container_name: proxygosha-ws
-    restart: unless-stopped
-    env_file:
-      - .env
-    environment:
-      - WORKERMAN_PORT=3001
-      - WORKERMAN_HOST=0.0.0.0
-      - WORKER_COUNT=1
-    command: ["php", "start.php", "start"]
-    volumes:
-      - proxygosha_storage:/app/storage
-
-  nginx:
-    image: nginx:alpine
-    container_name: proxygosha-nginx
-    restart: unless-stopped
-    depends_on:
-      - php-fpm
-      - workerman
+      - NODE_ENV=production
+      - PORT=3000
+      - HOST=0.0.0.0
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
-      - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./public:/app/public:ro
-
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: proxygosha-cloudflared
-    restart: unless-stopped
-    depends_on:
-      - nginx
-    command: tunnel --no-autoupdate run --token ${CF_TUNNEL_TOKEN}
-    environment:
-      - TUNNEL_TRANSPORT_PROTOCOL=quic
+      - proxygosha_storage:/app/storage
 
 volumes:
   proxygosha_storage:

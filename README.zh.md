@@ -1,43 +1,53 @@
-# ProxyGosha PHP (Nginx + index.php + Workerman) 中文部署指南
+# ProxyGosha Node.js (Express + WebSocket) 中文部署指南
 
-本项目采用**纯 PHP** 实现（**零 Node.js 运行时依赖**），支持直接作为 **Nginx + PHP-FPM (`public/index.php`) 标准网站** 默认启动，并搭配 **Workerman** 异步引擎承载 `/api/v1/ws` WebSocket 长连接与 Telegram DC1–DC5 直连转发。
-
----
-
-## 一、核心架构说明
-
-- **Nginx + `public/index.php`（PHP-FPM 默认网站入口）**：
-  - 站点默认打开即由 `public/index.php`（或根目录 `index.php`）响应：初始化向导 `/`、管理面板 `/<ADMIN_KEY>`、状态探测 `/<ADMIN_KEY>/status`、WebProxy 网桥 `/?bridge=...`、会话握手 `/api/v1/session`、健康检查 `/health` 与内置 LUXVEIL 伪装商城。
-  - `/assets/*` 静态文件直接由 Nginx 高效输出。
-- **Workerman WebSocket 后台引擎（`127.0.0.1:3001`）**：
-  - 由于 PHP-FPM 本身不支持持久 WebSocket 长连接与长驻异步 TCP，Nginx 只需将 `/api/v1/ws` 一条路由反代给后台托管的 Workerman 引擎（通过 systemd / Supervisor / Docker 自动随网站拉起，**无需每次手动执行 `php start.php start`**）。
-  - 网页初始化激活的配置会自动保存在 `storage/runtime.json`，PHP-FPM 与 Workerman 实时共享生效。
+本项目基于 **Node.js + TypeScript + Express + ws** 实现，单端口统一承载 HTTP 管理控制台、WebProxy 网桥、Session 握手、WebSocket 代理长连接与 Telegram DC1–DC5 异步直连转发（Fast Mode 下行零重加密直通）。
 
 ---
 
-## 二、部署方式 A：Nginx + PHP-FPM 标准网站部署（宝塔 / LNMP / 1Panel / 原生 Nginx）
+## 一、快速启动（本地 / VPS）
 
-### 1. 安装 PHP 依赖与环境
-要求 **PHP >= 8.1**，启用 `openssl`、`json`、`sockets` 扩展，安装 Composer 依赖：
 ```bash
-composer install --no-dev
+npm install
 cp .env.example .env
+npm run build
+npm run prod
 ```
 
-### 2. 配置 Nginx 网站站点
-将站点**运行目录（根目录）**指向项目下的 **`public/`**（目录内已自带 `index.php` 与 `console.html`），并参考根目录 `nginx.conf` 添加如下核心规则：
+- **开发模式**（自动编译前端 + 监听 `3000` 端口）：
+  ```bash
+  npm run dev
+  ```
+- **生产模式**（运行编译后的 `dist-client/` 与 `dist-server/server.mjs`）：
+  ```bash
+  npm run build
+  npm run prod
+  ```
+
+> 也可直接使用 `docker compose up -d --build` 一键启动容器版服务。
+
+---
+
+## 二、PaaS / Railpack 平台部署（Cloudzyro / Railway 等）
+
+项目已完全移除 Vite，采用纯 **Node.js + Express + WebSocket** 架构（前端由 `esbuild` + `@tailwindcss/cli` 编译至 `dist-client/`）。根目录内置 `railpack.json`，部署平台在构建时会自动执行 `npm ci` 与 `npm run build`，并使用 `node dist-server/server.mjs` 启动完整后端服务。
+
+1. **上传或推送代码**：确保包含 `package.json`、`package-lock.json`、`railpack.json`、`scripts/build.mjs`、`server.ts`、`index.html` 与 `src/`（请勿在根目录放置 `nginx.conf`，也无需上传 `node_modules/`、`dist-client/`、`dist-server/`、`.env`、`storage/` 与 `bun.lock`）。
+2. **环境变量配置（推荐）**：
+   - 在平台控制台的环境变量（Variables / Env）中添加 `ADMIN_KEY`（至少 16 位英文、数字、`-` 或 `_`），可选设置 `SECRET`、`ALLOWED_HOSTS="*"`、`EXTRA_HOSTS` 等。
+   - 若平台文件系统重启不保留本地文件，**强烈建议将 `ADMIN_KEY` 写入平台环境变量**，避免容器重启后临时配置丢失。
+3. **启动后访问**：
+   - 未设环境变量时，访问 `https://你的域名/` 会进入初始化页面完成激活；
+   - 已设 `ADMIN_KEY` 时，直接访问 `https://你的域名/<ADMIN_KEY>` 查看代理链接，`/<ADMIN_KEY>/status` 查看状态与执行 DC 探测，`/<ADMIN_KEY>/config` 在线调整配置。
+
+---
+
+## 三、Nginx 反向代理参考（VPS 自建域名）
+
+若前置使用 Nginx 绑定域名与 HTTPS 证书，直接将全站与 WebSocket 升级请求反代至 `http://127.0.0.1:3000`（详见 `docs/nginx.example.conf`）：
+
 ```nginx
-root /var/www/proxygosha/public;
-index index.php;
-
-# 禁止直接访问内部目录与配置文件
-location ~* ^/(\.env|composer\.|start\.php|nginx\.conf|app/|storage/|vendor/) {
-    return 404;
-}
-
-# Telegram WebSocket 长连接反代给 Workerman
-location = /api/v1/ws {
-    proxy_pass http://127.0.0.1:3001;
+location / {
+    proxy_pass http://127.0.0.1:3000;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "upgrade";
@@ -47,46 +57,4 @@ location = /api/v1/ws {
     proxy_read_timeout 86400s;
     proxy_buffering off;
 }
-
-# 默认全部网站路由交给 index.php
-location / {
-    try_files $uri $uri/ /index.php?$query_string;
-}
 ```
-> 若你的面板将站点根目录设为项目根目录（而非 `public/`），根目录也内置了 `index.php`，同样可直接访问。
-
-### 3. 后台常驻托管 Workerman WebSocket 引擎（免手动启动）
-无需前台敲 `php start.php start`，使用 **systemd** 或 **Supervisor** 托管一次即可开机自启、断线自动拉起：
-
-- **systemd 方式**（参考 `deploy/proxygosha-ws.service`）：
-  ```bash
-  sudo cp deploy/proxygosha-ws.service /etc/systemd/system/proxygosha-ws.service
-  # 根据实际目录修改 WorkingDirectory 和 ExecStart 路径后执行：
-  sudo systemctl daemon-reload
-  sudo systemctl enable --now proxygosha-ws
-  ```
-- **Supervisor 方式**（宝塔面板「进程守护管理器」或参考 `deploy/supervisor-proxygosha.conf`）：
-  - 启动命令：`/usr/bin/php /var/www/proxygosha/start.php start`
-  - 运行目录：`/var/www/proxygosha`
-  - 环境变量：`WORKERMAN_PORT=3001,WORKERMAN_HOST=127.0.0.1`
-
----
-
-## 三、部署方式 B：Docker Compose 一键全套启动（Nginx + PHP-FPM + Workerman + Cloudflared）
-
-仓库已内置标准多容器编排，执行一条命令即可拉起全部服务（Nginx 默认监听 `127.0.0.1:3000`）：
-```bash
-cp .env.example .env
-# 在 .env 填入 ADMIN_KEY 和 CF_TUNNEL_TOKEN 后：
-docker compose up -d --build
-```
-
----
-
-## 四、Cloudflare Tunnel 与 Telegram 连接
-
-1. **Cloudflare Zero Trust → Public Hostname**：
-   - Type：`HTTP`
-   - URL：`127.0.0.1:3000`（或你的 Nginx 站点监听地址）
-2. 打开 `https://你的域名/<你的ADMIN_KEY>` 复制 **443 / 2053 / 2083 / 2087 / 2096 / 8443** 端口对应的 `tg://webproxy?...` 链接即可在 Telegram 中连接。
-3. 打开 `https://你的域名/<你的ADMIN_KEY>/status` 查看 Workerman 实时会话统计并点击 **「执行 DC 探测」**。

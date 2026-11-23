@@ -1,4 +1,6 @@
 import "dotenv/config";
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
@@ -8,7 +10,6 @@ import { attachWebSocketServer } from "./src/proxy/engine.ts";
 import { createProxyRouter } from "./src/proxy/router.ts";
 import { sendDecoy } from "./src/proxy/templates.ts";
 import { reportError } from "./src/proxy/telemetry.ts";
-import { startTunnelIfConfigured, stopTunnel } from "./src/proxy/tunnel.ts";
 
 const isDevCommand =
   Boolean(process.env.npm_lifecycle_event?.includes("dev")) ||
@@ -20,39 +21,87 @@ const PORT =
   (isDevCommand ? 3000 : parseInt(process.env.PORT || "3000", 10) || 3000);
 const HOST = process.env.HOST || "0.0.0.0";
 
+function hashFile(filePath: string): string {
+  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex").slice(0, 10);
+}
+
+// 开发模式前端即时编译器（使用 esbuild + Tailwind CLI，不依赖 Vite）
+async function buildDevClient(rootDir: string, clientOutDir: string): Promise<void> {
+  const esbuild = await import("esbuild");
+  const assetsDir = path.join(clientOutDir, "assets");
+  fs.mkdirSync(assetsDir, { recursive: true });
+
+  const jsOutFile = path.join(assetsDir, "app.js");
+  await esbuild.build({
+    entryPoints: [path.resolve(rootDir, "src", "main.tsx")],
+    bundle: true,
+    format: "esm",
+    platform: "browser",
+    target: ["es2022"],
+    jsx: "automatic",
+    sourcemap: "inline",
+    outfile: jsOutFile,
+    alias: {
+      "@": rootDir,
+    },
+    define: {
+      "process.env.NODE_ENV": '"development"',
+    },
+  });
+
+  const cssInFile = path.resolve(rootDir, "src", "index.css");
+  const cssOutFile = path.join(assetsDir, "app.css");
+  const tailwindBin = path.resolve(rootDir, "node_modules", "@tailwindcss", "cli", "dist", "index.mjs");
+  execFileSync(process.execPath, [tailwindBin, "-i", cssInFile, "-o", cssOutFile], {
+    cwd: rootDir,
+    stdio: "inherit",
+  });
+
+  const jsHash = hashFile(jsOutFile);
+  const cssHash = hashFile(cssOutFile);
+  const rawHtml = fs.readFileSync(path.resolve(rootDir, "index.html"), "utf8");
+  const devHtml = rawHtml.replace(
+    /<script\s+type="module"\s+src="\/src\/main\.tsx"><\/script>/,
+    `<link rel="stylesheet" href="/assets/app.css?v=${cssHash}" />\n    <script type="module" src="/assets/app.js?v=${jsHash}"></script>`
+  );
+  fs.writeFileSync(path.join(clientOutDir, "index.html"), devHtml, "utf8");
+}
+
 async function bootstrapServer() {
   const app = express();
   app.disable("x-powered-by");
-  // 信任 Cloudflare Tunnel / 反向代理透传头（X-Forwarded-Host、X-Forwarded-Proto、CF-Connecting-IP）
+  // 信任反向代理透传头（X-Forwarded-Host、X-Forwarded-Proto、CF-Connecting-IP）
   app.set("trust proxy", true);
 
   const rootDir = process.cwd();
-  const distDir = path.resolve(rootDir, "dist");
+  const distDir = path.resolve(rootDir, "dist-client");
   const distIndexPath = path.join(distDir, "index.html");
   const isProd =
     process.env.NODE_ENV === "production" ||
     (!isDevCommand && fs.existsSync(distIndexPath));
 
-  let vite: Awaited<ReturnType<typeof import("vite")["createServer"]>> | null = null;
-
   if (!isProd) {
-    const { createServer: createViteServer } = await import("vite");
-    vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "custom",
-    });
+    await buildDevClient(rootDir, distDir);
+
+    // 监听前端源码变更并自动重新编译
+    let rebuildTimer: ReturnType<typeof setTimeout> | null = null;
+    const scheduleRebuild = () => {
+      if (rebuildTimer) clearTimeout(rebuildTimer);
+      rebuildTimer = setTimeout(() => {
+        buildDevClient(rootDir, distDir).catch((err) => {
+          console.error("[proxygosha-node] 开发前端编译失败:", err);
+        });
+      }, 150);
+    };
+    for (const watchTarget of [path.resolve(rootDir, "src"), path.resolve(rootDir, "index.html")]) {
+      if (fs.existsSync(watchTarget)) {
+        fs.watch(watchTarget, { recursive: true }, scheduleRebuild);
+      }
+    }
   }
 
-  // 渲染前端 SPA 页面（开发模式走 Vite 实时编译，生产模式直接返回 dist/index.html）
-  const serveSpa = async (req: Request, res: Response): Promise<void> => {
-    if (!isProd && vite) {
-      const templatePath = path.resolve(rootDir, "index.html");
-      const rawHtml = fs.readFileSync(templatePath, "utf8");
-      const transformed = await vite.transformIndexHtml(req.originalUrl, rawHtml);
-      res.status(200).setHeader("Content-Type", "text/html; charset=utf-8").send(transformed);
-      return;
-    }
-
+  // 渲染前端 SPA 页面（开发/生产统一返回 dist-client/index.html）
+  const serveSpa = async (_req: Request, res: Response): Promise<void> => {
     if (fs.existsSync(distIndexPath)) {
       res.status(200).setHeader("Content-Type", "text/html; charset=utf-8").sendFile(distIndexPath);
       return;
@@ -61,16 +110,14 @@ async function bootstrapServer() {
     res.status(500).setHeader("Content-Type", "text/plain; charset=utf-8").send("未找到前端构建产物，请先执行 npm run build。");
   };
 
-  // 在 Vite/静态资源中间件之前挂载 ProxyGosha 核心代理路由
+  // 在静态资源中间件之前挂载 ProxyGosha 核心代理路由
   app.use(createProxyRouter({ serveSpa }));
 
-  if (!isProd && vite) {
-    app.use(vite.middlewares);
-  } else if (fs.existsSync(distDir)) {
+  if (fs.existsSync(distDir)) {
     app.use(
       express.static(distDir, {
         index: false,
-        maxAge: "7d",
+        maxAge: isProd ? "7d" : 0,
       })
     );
   }
@@ -87,7 +134,7 @@ async function bootstrapServer() {
   });
 
   const httpServer = http.createServer(app);
-  // 针对 Cloudflare Tunnel 与 HTTP/1.1 长连接优化保活超时
+  // 优化 HTTP/1.1 长连接保活超时
   httpServer.keepAliveTimeout = 65000;
   httpServer.headersTimeout = 66000;
 
@@ -100,11 +147,9 @@ async function bootstrapServer() {
     console.log(
       `[proxygosha-node] 当前状态: ${cfg ? `已配置 (carrier=${cfg.carrier}, maxStreams=${cfg.maxStreams})` : "未配置（请访问 / 完成初始化）"}`
     );
-    startTunnelIfConfigured(PORT);
   });
 
   const shutdown = () => {
-    stopTunnel();
     httpServer.close(() => {
       process.exit(0);
     });

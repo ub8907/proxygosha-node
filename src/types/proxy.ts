@@ -1,22 +1,9 @@
-export interface TunnelStatusData {
-  binaryAvailable: boolean;
-  autostartEnabled: boolean;
-  tokenConfigured: boolean;
-  running: boolean;
-  pid: number | null;
-  requestsViaTunnel: number;
-  lastTunnelHost: string;
-  lastRayColo: string;
-  lastError: string;
-}
-
 export interface SetupStatusData {
   configured: boolean;
   host: string;
   proto: "https" | "http";
   adminKeyTooShort: boolean;
   suggestedKey: string;
-  tunnel: TunnelStatusData;
   version: string;
 }
 
@@ -82,7 +69,6 @@ export interface PanelStateData {
     uptimeMs: number;
     uptimeFormatted: string;
   };
-  tunnel: TunnelStatusData;
   logs: LogEntryData[];
 }
 
