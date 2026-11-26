@@ -1,8 +1,8 @@
-# ProxyGosha Node.js (Express + WebSocket)
+# ProxyGosha Node.js (Express + WebSocket + VLESS)
 
 [中文文档 / Chinese Guide](./README.zh.md)
 
-Pure **Node.js + Express + WebSocket (`ws`)** MTProto WebProxy (`Fast Mode` zero re-encryption downlink) with a built-in React management console, dynamic runtime settings (`storage/runtime.json`), and live Telegram DC1–DC5 MTProto probing.
+Pure **Node.js + Express + WebSocket (`ws`)** server running **MTProto WebProxy** (with a unified `SECRET` across all ports) and **V2Ray / v2rayN VLESS** (`VLESS-over-WS` + `VLESS-over-HTTP`) on a single unified port, complete with live WebSocket connectivity diagnostics and Telegram DC1–DC5 probing.
 
 ## Quick Start
 

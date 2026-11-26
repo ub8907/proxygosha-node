@@ -35,6 +35,19 @@ function generateSecretHexClient(): string {
   return hex;
 }
 
+// 在浏览器端生成标准 UUID v4
+function generateUuidV4Client(): string {
+  if (typeof crypto.randomUUID === "function") {
+    return crypto.randomUUID();
+  }
+  const b = new Uint8Array(16);
+  crypto.getRandomValues(b);
+  b[6] = (b[6] & 0x0f) | 0x40;
+  b[8] = (b[8] & 0x3f) | 0x80;
+  const h = Array.from(b, (x) => x.toString(16).padStart(2, "0"));
+  return `${h.slice(0, 4).join("")}-${h.slice(4, 6).join("")}-${h.slice(6, 8).join("")}-${h.slice(8, 10).join("")}-${h.slice(10, 16).join("")}`;
+}
+
 // 动态运行配置编辑器（无需重启进程，实时持久化到 storage/runtime.json 并热更新）
 export function ConfigView({ data, adminBasePath, lang, onConfigSaved }: ConfigViewProps) {
   const t = TRANSLATIONS[lang];
@@ -56,6 +69,16 @@ export function ConfigView({ data, adminBasePath, lang, onConfigSaved }: ConfigV
   const [debug, setDebug] = useState(Boolean(data.config.debug));
   const [generatorEnabled, setGeneratorEnabled] = useState(Boolean(data.config.generatorEnabled));
   const [acceptGenerated, setAcceptGenerated] = useState(Boolean(data.config.acceptGenerated));
+  const [vlessEnabled, setVlessEnabled] = useState(data.config.vlessEnabled !== false);
+  const [vlessUuid, setVlessUuid] = useState(
+    data.config.vlessUuid || "03267b72-5095-44be-8af1-a511b692832b"
+  );
+  const [vlessPath, setVlessPath] = useState(
+    data.config.vlessPath || "/helloss-jsusyxystsdsahysy"
+  );
+  const [vlessDisguisedDomain, setVlessDisguisedDomain] = useState(
+    data.config.vlessDisguisedDomain || "https://example.com"
+  );
 
   const [saving, setSaving] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -81,6 +104,10 @@ export function ConfigView({ data, adminBasePath, lang, onConfigSaved }: ConfigV
     setDebug(Boolean(data.config.debug));
     setGeneratorEnabled(Boolean(data.config.generatorEnabled));
     setAcceptGenerated(Boolean(data.config.acceptGenerated));
+    setVlessEnabled(data.config.vlessEnabled !== false);
+    setVlessUuid(data.config.vlessUuid || "03267b72-5095-44be-8af1-a511b692832b");
+    setVlessPath(data.config.vlessPath || "/helloss-jsusyxystsdsahysy");
+    setVlessDisguisedDomain(data.config.vlessDisguisedDomain || "https://example.com");
   }, [adminBasePath, data]);
 
   const envSnippet = useMemo(() => {
@@ -101,6 +128,10 @@ export function ConfigView({ data, adminBasePath, lang, onConfigSaved }: ConfigV
       `DC_PORTS="${dcPorts.trim() || "443,80,5222"}"`,
       `SESSION_PATH="${sessionPath.trim() || "/api/v1/session"}"`,
       `WS_PATH="${wsPath.trim() || "/api/v1/ws"}"`,
+      `VLESS_ENABLED=${vlessEnabled ? "true" : "false"}`,
+      `UUID="${vlessUuid.trim()}"`,
+      `VLESS_PATH="${vlessPath.trim() || "/helloss-jsusyxystsdsahysy"}"`,
+      `DISGUISED_DOMAIN="${vlessDisguisedDomain.trim() || "https://example.com"}"`,
       `DEBUG=${debug ? "true" : "false"}`,
     ];
     return lines.join("\n");
@@ -117,6 +148,10 @@ export function ConfigView({ data, adminBasePath, lang, onConfigSaved }: ConfigV
     dcPorts,
     sessionPath,
     wsPath,
+    vlessEnabled,
+    vlessUuid,
+    vlessPath,
+    vlessDisguisedDomain,
     debug,
   ]);
 
@@ -149,6 +184,10 @@ export function ConfigView({ data, adminBasePath, lang, onConfigSaved }: ConfigV
           debug,
           generatorEnabled,
           acceptGenerated,
+          vlessEnabled,
+          vlessUuid: vlessUuid.trim(),
+          vlessPath: vlessPath.trim(),
+          vlessDisguisedDomain: vlessDisguisedDomain.trim(),
         }),
       });
       const json = (await resp.json()) as {
@@ -526,6 +565,75 @@ export function ConfigView({ data, adminBasePath, lang, onConfigSaved }: ConfigV
                   />
                   <span>{t.cfgAcceptGeneratedToggle}</span>
                 </label>
+              </div>
+            </div>
+          </section>
+
+          {/* 4. V2Ray / v2rayN (VLESS) 代理配置 */}
+          <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-5">
+            <h2 className="text-base font-semibold text-slate-900 border-b border-slate-200 pb-3">
+              {t.cfgSectionVless}
+            </h2>
+
+            <label className="flex items-center gap-2.5 text-sm text-slate-800 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={vlessEnabled}
+                onChange={(e) => setVlessEnabled(e.target.checked)}
+                className="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-600"
+              />
+              <span className="font-medium">{t.cfgVlessEnabledToggle}</span>
+            </label>
+
+            <div className="space-y-1.5">
+              <label className="block text-sm font-medium text-slate-800">
+                {t.cfgVlessUuidLabel}
+              </label>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  value={vlessUuid}
+                  onChange={(e) => setVlessUuid(e.target.value)}
+                  required
+                  className="flex-1 min-w-0 font-mono text-sm px-3 py-2 rounded-md border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
+                />
+                <button
+                  type="button"
+                  onClick={() => setVlessUuid(generateUuidV4Client())}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-md border border-slate-200 bg-slate-50 text-slate-700 hover:bg-slate-100 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>{t.cfgVlessGenerateUuid}</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-slate-800">
+                  {t.cfgVlessPathLabel}
+                </label>
+                <input
+                  type="text"
+                  value={vlessPath}
+                  onChange={(e) => setVlessPath(e.target.value)}
+                  required
+                  className="w-full font-mono text-sm px-3 py-2 rounded-md border border-slate-300 bg-white text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
+                />
+                <p className="text-xs text-slate-500">{t.cfgVlessPathHelp}</p>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="block text-sm font-medium text-slate-800">
+                  {t.cfgVlessDisguisedLabel}
+                </label>
+                <input
+                  type="url"
+                  value={vlessDisguisedDomain}
+                  onChange={(e) => setVlessDisguisedDomain(e.target.value)}
+                  placeholder="https://example.com"
+                  className="w-full text-sm px-3 py-2 rounded-md border border-slate-300 bg-white text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
+                />
               </div>
             </div>
           </section>

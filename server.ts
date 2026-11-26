@@ -5,11 +5,12 @@ import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import express, { type NextFunction, type Request, type Response } from "express";
-import { getRuntime } from "./src/proxy/config.ts";
+import { getRuntime, getVlessRuntime } from "./src/proxy/config.ts";
 import { attachWebSocketServer } from "./src/proxy/engine.ts";
 import { createProxyRouter } from "./src/proxy/router.ts";
 import { sendDecoy } from "./src/proxy/templates.ts";
 import { reportError } from "./src/proxy/telemetry.ts";
+import { createVlessHttpMiddleware } from "./src/proxy/vless.ts";
 
 const isDevCommand =
   Boolean(process.env.npm_lifecycle_event?.includes("dev")) ||
@@ -110,8 +111,13 @@ async function bootstrapServer() {
     res.status(500).setHeader("Content-Type", "text/plain; charset=utf-8").send("未找到前端构建产物，请先执行 npm run build。");
   };
 
+  let actualPort = PORT;
+
+  // 在 MTProto 路由之前优先处理 VLESS-over-HTTP 请求（匹配 VLESS_PATH + content-type: application/vless 时接管）
+  app.use(createVlessHttpMiddleware(() => getVlessRuntime()));
+
   // 在静态资源中间件之前挂载 ProxyGosha 核心代理路由
-  app.use(createProxyRouter({ serveSpa }));
+  app.use(createProxyRouter({ serveSpa, getListeningPort: () => actualPort }));
 
   if (fs.existsSync(distDir)) {
     app.use(
@@ -138,14 +144,19 @@ async function bootstrapServer() {
   httpServer.keepAliveTimeout = 65000;
   httpServer.headersTimeout = 66000;
 
-  // 在同一 HTTP 服务器（3000 端口）挂载原生 WebSocket 代理引擎
-  attachWebSocketServer(httpServer, () => getRuntime());
+  // 在同一 HTTP 服务器（统一端口）挂载原生 WebSocket 代理引擎（含 MTProto、VLESS 与 WS 连通测试）
+  attachWebSocketServer(httpServer, () => getRuntime(), () => getVlessRuntime());
 
   httpServer.listen(PORT, HOST, () => {
+    const addr = httpServer.address();
+    if (addr && typeof addr === "object") {
+      actualPort = addr.port;
+    }
     const cfg = getRuntime();
-    console.log(`[proxygosha-node] Express + WS 服务已启动，监听 http://${HOST}:${PORT}`);
+    const vlessCfg = getVlessRuntime();
+    console.log(`[proxygosha-node] Express + WS 服务已启动，监听 http://${HOST}:${actualPort}`);
     console.log(
-      `[proxygosha-node] 当前状态: ${cfg ? `已配置 (carrier=${cfg.carrier}, maxStreams=${cfg.maxStreams})` : "未配置（请访问 / 完成初始化）"}`
+      `[proxygosha-node] 当前状态: ${cfg ? `已配置 (carrier=${cfg.carrier}, maxStreams=${cfg.maxStreams})` : "未配置（请访问 / 完成初始化）"} | VLESS=${vlessCfg.enabled ? vlessCfg.path : "disabled"}`
     );
   });
 

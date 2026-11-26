@@ -27,10 +27,19 @@ export interface LogEntryData {
   detail: string;
 }
 
+export interface VlessHostEntry {
+  host: string;
+  port: string;
+  security: "tls" | "none";
+  uri: string;
+  httpUrl: string;
+}
+
 export interface PanelStateData {
   version: string;
   proto: "https" | "http";
   currentHost: string;
+  unifiedSecret: string;
   ephemeralSetup: boolean;
   runtimePersisted?: boolean;
   hasRuntimeOverride?: boolean;
@@ -49,6 +58,17 @@ export interface PanelStateData {
     debug?: boolean;
     generatorEnabled?: boolean;
     acceptGenerated?: boolean;
+    vlessEnabled?: boolean;
+    vlessUuid?: string;
+    vlessPath?: string;
+    vlessDisguisedDomain?: string;
+  };
+  vless: {
+    enabled: boolean;
+    uuid: string;
+    path: string;
+    disguisedDomain: string;
+    hosts: VlessHostEntry[];
   };
   hostConfigs: HostConfigEntry[];
   stats: {
@@ -68,6 +88,10 @@ export interface PanelStateData {
     statusViews: number;
     uptimeMs: number;
     uptimeFormatted: string;
+    vlessConnections?: number;
+    vlessActive?: number;
+    vlessBytesUpFormatted?: string;
+    vlessBytesDownFormatted?: string;
   };
   logs: LogEntryData[];
 }
@@ -90,4 +114,41 @@ export interface ProbeResultData {
   mtprotoMs?: number | null;
   reason?: string;
   altPorts?: ProbeAltPortResult[];
+}
+
+export interface WsProbeServerResponse {
+  local: {
+    ok: boolean;
+    rttMs: number;
+    listeningPort: number;
+    subprotocolOk: boolean;
+    binaryEchoOk: boolean;
+    error: string | null;
+  };
+  request: {
+    proto: "https" | "http";
+    host: string;
+    forwardedProto: string;
+    forwardedHost: string;
+    via: string;
+    cfRay: string;
+  };
+  endpoints: {
+    mtprotoWsPath: string;
+    vlessWsPath: string | null;
+    wsTestPath: string;
+  };
+}
+
+export interface WsBrowserTestResult {
+  ok: boolean;
+  wsUrl: string;
+  rttMs: number | null;
+  handshakeOk: boolean;
+  subprotocolOk: boolean;
+  negotiatedProtocol: string;
+  binaryEchoOk: boolean;
+  closeCode: number | null;
+  closeReason: string;
+  error: string | null;
 }

@@ -1,6 +1,6 @@
-# ProxyGosha Node.js (Express + WebSocket) 中文部署指南
+# ProxyGosha Node.js (Express + WebSocket + VLESS) 中文部署指南
 
-本项目基于 **Node.js + TypeScript + Express + ws** 实现，单端口统一承载 HTTP 管理控制台、WebProxy 网桥、Session 握手、WebSocket 代理长连接与 Telegram DC1–DC5 异步直连转发（Fast Mode 下行零重加密直通）。
+本项目基于 **Node.js + TypeScript + Express + ws** 实现，**单端口**统一承载 HTTP 管理控制台、MTProto WebProxy 网桥（全端口共用统一 `SECRET`）、内置 **V2Ray / v2rayN (VLESS-over-WS & VLESS-over-HTTP)** 代理，以及端到端 **WebSocket 连通性诊断**与 Telegram DC1–DC5 实时探测。
 
 ---
 

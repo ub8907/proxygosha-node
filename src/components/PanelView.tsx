@@ -1,4 +1,4 @@
-import { ExternalLink, AlertTriangle } from "lucide-react";
+import { ExternalLink, AlertTriangle, KeyRound, ShieldCheck } from "lucide-react";
 import { CopyButton } from "./CopyButton.tsx";
 import type { Lang } from "../proxy/i18n.ts";
 import { TRANSLATIONS } from "../proxy/i18n.ts";
@@ -9,7 +9,7 @@ interface PanelViewProps {
   lang: Lang;
 }
 
-// Telegram WEB 代理链接与 6 端口密钥管理面板
+// Telegram WEB 代理链接与 V2Ray/v2rayN VLESS 节点配置面板
 export function PanelView({ data, lang }: PanelViewProps) {
   const t = TRANSLATIONS[lang];
 
@@ -42,6 +42,26 @@ export function PanelView({ data, lang }: PanelViewProps) {
         {data.ephemeralSetup && (
           <div className="bg-slate-100 border border-slate-200 rounded-lg px-4 py-3 text-xs text-slate-700">
             {t.ephemeralWarn}
+          </div>
+        )}
+
+        {data.unifiedSecret && (
+          <div className="bg-white border border-slate-200 rounded-lg px-4 py-3.5 flex flex-wrap items-center justify-between gap-4">
+            <div className="space-y-1 min-w-0">
+              <div className="flex items-center gap-2 text-xs font-semibold text-slate-700">
+                <KeyRound className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+                <span>{t.unifiedSecretLabel}</span>
+              </div>
+              <div className="font-mono text-sm font-semibold text-slate-900 break-all">
+                {data.unifiedSecret}
+              </div>
+              <div className="text-xs text-slate-500">{t.unifiedSecretNote}</div>
+            </div>
+            <CopyButton
+              value={data.unifiedSecret}
+              label={t.copySecret}
+              copiedLabel={t.copied}
+            />
           </div>
         )}
       </div>
@@ -129,6 +149,97 @@ export function PanelView({ data, lang }: PanelViewProps) {
           </div>
         </section>
       ))}
+
+      {/* V2Ray / v2rayN (VLESS) 节点配置与一键导入链接 */}
+      {data.vless && (
+        <section className="space-y-4 pt-4 border-t border-slate-200">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div className="space-y-1 max-w-3xl">
+              <div className="flex items-center gap-2.5">
+                <ShieldCheck className="w-5 h-5 text-blue-600 shrink-0" />
+                <h2 className="text-xl font-bold tracking-tight text-slate-900">
+                  {t.vlessPanelTitle}
+                </h2>
+                <span
+                  className={`px-2 py-0.5 text-xs font-medium rounded border ${
+                    data.vless.enabled
+                      ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                      : "bg-slate-100 text-slate-600 border-slate-200"
+                  }`}
+                >
+                  {data.vless.enabled ? t.vlessEnabledLabel : t.vlessDisabledLabel}
+                </span>
+              </div>
+              <p className="text-sm text-slate-600">{t.vlessPanelSubtitle}</p>
+            </div>
+          </div>
+
+          {data.vless.enabled && (
+            <div className="space-y-4">
+              {data.vless.hosts.map((vh) => (
+                <div
+                  key={vh.host}
+                  className="bg-white border border-slate-200 rounded-lg overflow-hidden"
+                >
+                  <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                    <div className="font-mono text-sm font-semibold text-slate-900">
+                      {vh.host}:{vh.port}
+                    </div>
+                    <CopyButton
+                      value={vh.uri}
+                      label={t.copyVlessUri}
+                      copiedLabel={t.copied}
+                    />
+                  </div>
+                  <div className="p-5 space-y-4">
+                    <div className="bg-slate-50 border border-slate-200 rounded-md px-3.5 py-2.5 font-mono text-xs text-slate-800 break-all">
+                      {vh.uri}
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
+                      <div className="border border-slate-200 rounded-md p-3">
+                        <div className="text-slate-500">{t.vlessAddressLabel}</div>
+                        <div className="mt-1 font-mono font-semibold text-slate-900 break-all">
+                          {vh.host}
+                        </div>
+                      </div>
+                      <div className="border border-slate-200 rounded-md p-3">
+                        <div className="text-slate-500">{t.vlessPortLabel}</div>
+                        <div className="mt-1 font-mono font-semibold tabular-nums text-slate-900">
+                          {vh.port}
+                        </div>
+                      </div>
+                      <div className="border border-slate-200 rounded-md p-3">
+                        <div className="text-slate-500">{t.vlessUuidLabel}</div>
+                        <div className="mt-1 font-mono font-semibold text-slate-900 break-all">
+                          {data.vless.uuid}
+                        </div>
+                      </div>
+                      <div className="border border-slate-200 rounded-md p-3">
+                        <div className="text-slate-500">{t.vlessPathLabel}</div>
+                        <div className="mt-1 font-mono font-semibold text-slate-900 break-all">
+                          {data.vless.path}
+                        </div>
+                      </div>
+                      <div className="border border-slate-200 rounded-md p-3">
+                        <div className="text-slate-500">{t.vlessTransportLabel} / {t.vlessSecurityLabel}</div>
+                        <div className="mt-1 font-mono font-semibold text-slate-900">
+                          ws / {vh.security}
+                        </div>
+                      </div>
+                      <div className="border border-slate-200 rounded-md p-3">
+                        <div className="text-slate-500">{t.vlessHttpFallbackLabel}</div>
+                        <div className="mt-1 font-mono font-semibold text-slate-900 break-all">
+                          {vh.httpUrl}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }

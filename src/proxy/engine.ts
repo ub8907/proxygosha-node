@@ -14,6 +14,7 @@ import {
   concat,
   ObfuscatedCtrStream,
   reverse,
+  safeEqual,
   sha256,
 } from "./crypto.ts";
 import {
@@ -23,8 +24,10 @@ import {
   requestPort,
   verifyToken,
   type ProxyRuntime,
+  type VlessRuntimeConfig,
 } from "./config.ts";
 import { fmtBytes, fmtDuration, logEvent, reportError, STATS } from "./telemetry.ts";
+import { handleVlessWebSocketUpgrade } from "./vless.ts";
 
 export interface ProbeAltPortResult {
   port: number;
@@ -44,6 +47,15 @@ export interface ProbeResult {
   mtprotoMs: number | null;
   reason: string;
   altPorts?: ProbeAltPortResult[];
+}
+
+export interface LocalWsProbeResult {
+  ok: boolean;
+  rttMs: number;
+  listeningPort: number;
+  subprotocolOk: boolean;
+  binaryEchoOk: boolean;
+  error: string | null;
 }
 
 function frame(type: number, id: number, payload: Uint8Array): Buffer {
@@ -717,7 +729,8 @@ function rejectUpgrade(socket: Duplex, status = 404, message = "Not Found"): voi
 
 export function attachWebSocketServer(
   httpServer: HttpServer,
-  getCfg: () => ProxyRuntime | null
+  getCfg: () => ProxyRuntime | null,
+  getVlessCfg?: () => VlessRuntimeConfig
 ): void {
   const wss = new WebSocketServer({
     noServer: true,
@@ -730,24 +743,86 @@ export function attachWebSocketServer(
     },
   });
 
+  // 用于管理台 WS 连通性诊断的专用认证回显服务器
+  const probeWss = new WebSocketServer({
+    noServer: true,
+    perMessageDeflate: false,
+    maxPayload: 1024 * 1024,
+    handleProtocols: (protocols) => {
+      if (protocols.has("tproxy-v1.probe")) return "tproxy-v1.probe";
+      const [first] = protocols;
+      return first || false;
+    },
+  });
+
   httpServer.on("upgrade", (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     try {
       const cfg = getCfg();
+      const vlessCfg = getVlessCfg ? getVlessCfg() : null;
+      const rawUrl = req.url || "/";
+      const parsed = new URL(rawUrl, "http://localhost");
+      const pathname = parsed.pathname;
+
+      // 1. 管理台 WebSocket 连通性探测端点：/<ADMIN_KEY>/api/ws-test
+      if (cfg && cfg.adminKey) {
+        let decodedPath = "";
+        try {
+          decodedPath = decodeURIComponent(pathname.slice(1)).replace(/\/+$/, "");
+        } catch {
+          decodedPath = "";
+        }
+        if (decodedPath && safeEqual(decodedPath, `${cfg.adminKey}/api/ws-test`)) {
+          probeWss.handleUpgrade(req, socket, head, (ws) => {
+            ws.binaryType = "nodebuffer";
+            try {
+              ws.send(
+                JSON.stringify({
+                  type: "hello",
+                  serverTime: Date.now(),
+                  protocol: ws.protocol || null,
+                })
+              );
+            } catch {
+              // ignore
+            }
+            ws.on("message", (data, isBinary) => {
+              if (ws.readyState !== WebSocket.OPEN) return;
+              try {
+                ws.send(data, { binary: isBinary });
+              } catch {
+                // ignore
+              }
+            });
+          });
+          return;
+        }
+      }
+
+      const host = requestHost(req);
+      const port = requestPort(req);
+
+      // 2. VLESS WebSocket 代理路径（与 MTProto 共享同一端口，按路径分流）
+      if (vlessCfg && vlessCfg.enabled && pathname === vlessCfg.path) {
+        if (cfg && !hostAllowed(cfg, host)) {
+          STATS.wsRejects++;
+          logEvent("ws_reject", `host=${host} reason=vless_host_not_allowed`);
+          rejectUpgrade(socket, 404);
+          return;
+        }
+        handleVlessWebSocketUpgrade(req, socket, head, vlessCfg);
+        return;
+      }
+
       if (!cfg) {
         rejectUpgrade(socket, 404);
         return;
       }
 
-      const rawUrl = req.url || "/";
-      const parsed = new URL(rawUrl, "http://localhost");
-      if (parsed.pathname !== cfg.wsPath && parsed.pathname !== "/api/v1/ws") {
-        // Do not interfere with non-proxy upgrades (if any); otherwise reject.
+      // 3. MTProto WebProxy WebSocket 路径
+      if (pathname !== cfg.wsPath && pathname !== "/api/v1/ws") {
         rejectUpgrade(socket, 404);
         return;
       }
-
-      const host = requestHost(req);
-      const port = requestPort(req);
 
       if (!hostAllowed(cfg, host)) {
         STATS.wsRejects++;
@@ -1055,4 +1130,79 @@ export async function probeDcs(cfg: ProxyRuntime): Promise<ProbeResult[]> {
       .join(" ")
   );
   return results;
+}
+
+// 后端本地 WebSocket 环回自检：确认 Node.js ws 服务与二进制帧回显工作正常，用于排查是否为外部服务商屏蔽 WS
+export function probeLocalWebSocket(
+  listeningPort: number,
+  adminKey: string,
+  timeoutMs = 3000
+): Promise<LocalWsProbeResult> {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const wsUrl = `ws://127.0.0.1:${listeningPort}/${encodeURIComponent(adminKey)}/api/ws-test`;
+    const ws = new WebSocket(wsUrl, "tproxy-v1.probe");
+    const pingBytes = randomBytes(24);
+    let settled = false;
+    let subprotocolOk = false;
+    let binaryEchoOk = false;
+
+    const finish = (ok: boolean, error: string | null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      try {
+        ws.removeAllListeners();
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+          ws.close();
+        }
+      } catch {
+        // ignore
+      }
+      resolve({
+        ok,
+        rttMs: Date.now() - started,
+        listeningPort,
+        subprotocolOk,
+        binaryEchoOk,
+        error,
+      });
+    };
+
+    const timer = setTimeout(() => {
+      finish(false, "local_ws_timeout");
+    }, timeoutMs);
+
+    ws.on("open", () => {
+      subprotocolOk = ws.protocol === "tproxy-v1.probe";
+      try {
+        ws.send(pingBytes, { binary: true });
+      } catch (err) {
+        finish(false, err instanceof Error ? err.message : "send_failed");
+      }
+    });
+
+    ws.on("message", (data, isBinary) => {
+      if (!isBinary) return;
+      const buf = Buffer.isBuffer(data)
+        ? data
+        : Array.isArray(data)
+        ? Buffer.concat(data)
+        : Buffer.from(data as ArrayBuffer);
+      if (buf.equals(pingBytes)) {
+        binaryEchoOk = true;
+        finish(true, null);
+      }
+    });
+
+    ws.on("error", (err) => {
+      finish(false, err.message || "local_ws_error");
+    });
+
+    ws.on("close", (code, reason) => {
+      if (!settled) {
+        finish(false, `closed(${code}${reason?.length ? `:${reason.toString()}` : ""})`);
+      }
+    });
+  });
 }

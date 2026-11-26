@@ -18,6 +18,7 @@ import {
   deriveSecret,
   generatorLabel,
   getRuntime,
+  getVlessRuntime,
   hasBaseEnvRuntime,
   hasRuntimeOverride,
   hostAllowed,
@@ -33,12 +34,14 @@ import {
   verifyToken,
   type ProxyRuntime,
 } from "./config.ts";
-import { probeDcs } from "./engine.ts";
+import { probeDcs, probeLocalWebSocket } from "./engine.ts";
 import { sendDecoy, serveBridge } from "./templates.ts";
 import { fmtBytes, fmtDuration, LOG, logEvent, PROCESS_START, STATS } from "./telemetry.ts";
+import { buildVlessShareUri } from "./vless.ts";
 
 export interface ProxyRouterOptions {
   serveSpa: (req: Request, res: Response) => Promise<void>;
+  getListeningPort?: () => number;
 }
 
 function sendNotFound(res: Response): void {
@@ -208,7 +211,7 @@ async function handleSession(req: Request, res: Response, cfg: ProxyRuntime): Pr
     .send(WELCOME);
 }
 
-function buildPanelStatePayload(cfg: ProxyRuntime, host: string, proto: "https" | "http") {
+function buildPanelStatePayload(cfg: ProxyRuntime, host: string, proto: "https" | "http", reqPort = "") {
   const baseSecret = cfg.base ? "dd" + bytesToHex(cfg.base) : "";
   const hosts: string[] = [];
   for (const h of [host, ...cfg.extraHosts]) {
@@ -231,10 +234,19 @@ function buildPanelStatePayload(cfg: ProxyRuntime, host: string, proto: "https" 
     }),
   }));
 
+  const vlessCfg = {
+    enabled: cfg.vlessEnabled,
+    uuid: cfg.vlessUuid,
+    path: cfg.vlessPath,
+    disguisedDomain: cfg.vlessDisguisedDomain,
+    debug: cfg.debug,
+  };
+
   return {
     version: VERSION,
     proto,
     currentHost: host,
+    unifiedSecret: baseSecret,
     ephemeralSetup: isEphemeralSetup(),
     runtimePersisted: isRuntimePersisted(),
     hasRuntimeOverride: hasRuntimeOverride(),
@@ -253,6 +265,27 @@ function buildPanelStatePayload(cfg: ProxyRuntime, host: string, proto: "https" 
       debug: cfg.debug,
       generatorEnabled: cfg.generatorEnabled,
       acceptGenerated: cfg.acceptGenerated,
+      vlessEnabled: cfg.vlessEnabled,
+      vlessUuid: cfg.vlessUuid,
+      vlessPath: cfg.vlessPath,
+      vlessDisguisedDomain: cfg.vlessDisguisedDomain,
+    },
+    vless: {
+      enabled: cfg.vlessEnabled,
+      uuid: cfg.vlessUuid,
+      path: cfg.vlessPath,
+      disguisedDomain: cfg.vlessDisguisedDomain,
+      hosts: hosts.map((h) => {
+        const effectivePort = reqPort || (proto === "https" ? "443" : "80");
+        const portPart = effectivePort !== "443" && effectivePort !== "80" ? `:${effectivePort}` : "";
+        return {
+          host: h,
+          port: effectivePort,
+          security: proto === "https" ? ("tls" as const) : ("none" as const),
+          uri: buildVlessShareUri(h, proto, vlessCfg, reqPort || undefined),
+          httpUrl: `${proto}://${h}${portPart}${cfg.vlessPath}`,
+        };
+      }),
     },
     hostConfigs,
     stats: {
@@ -272,6 +305,10 @@ function buildPanelStatePayload(cfg: ProxyRuntime, host: string, proto: "https" 
       statusViews: STATS.statusViews,
       uptimeMs: Date.now() - PROCESS_START,
       uptimeFormatted: fmtDuration(Date.now() - PROCESS_START),
+      vlessConnections: STATS.vlessConnections,
+      vlessActive: STATS.vlessActive,
+      vlessBytesUpFormatted: fmtBytes(STATS.vlessBytesUp),
+      vlessBytesDownFormatted: fmtBytes(STATS.vlessBytesDown),
     },
     logs: LOG.slice(-60).reverse(),
   };
@@ -398,12 +435,41 @@ export function createProxyRouter(options: ProxyRouterOptions): Router {
       // 3. 管理面板、动态配置与状态探测路由：/<ADMIN_KEY>、/<ADMIN_KEY>/status、/<ADMIN_KEY>/config、/<ADMIN_KEY>/api/*
       const route = panelRoute(pathname, urlObj.searchParams, cfg);
       if (route === "api-state" && req.method === "GET") {
-        res.status(200).setHeader("Cache-Control", "no-store").json(buildPanelStatePayload(cfg, host, proto));
+        res.status(200).setHeader("Cache-Control", "no-store").json(buildPanelStatePayload(cfg, host, proto, port));
         return;
       }
       if (route === "api-probe" && (req.method === "POST" || req.method === "GET")) {
         const results = await probeDcs(cfg);
         res.status(200).setHeader("Content-Type", "application/json; charset=utf-8").setHeader("Cache-Control", "no-store").json({ results });
+        return;
+      }
+      if (route === "api-ws-probe" && (req.method === "POST" || req.method === "GET")) {
+        const portToProbe = options.getListeningPort
+          ? options.getListeningPort()
+          : parseInt(process.env.PROXY_PORT || process.env.PORT || "3000", 10) || 3000;
+        const local = await probeLocalWebSocket(portToProbe, cfg.adminKey);
+        const vlessCfg = getVlessRuntime();
+        logEvent("ws_probe", `local=${local.ok ? "ok" : "fail"}(${local.rttMs}ms)`);
+        res
+          .status(200)
+          .setHeader("Content-Type", "application/json; charset=utf-8")
+          .setHeader("Cache-Control", "no-store")
+          .json({
+            local,
+            request: {
+              proto,
+              host,
+              forwardedProto: String(req.headers["x-forwarded-proto"] || ""),
+              forwardedHost: String(req.headers["x-forwarded-host"] || ""),
+              via: String(req.headers.via || ""),
+              cfRay: String(req.headers["cf-ray"] || ""),
+            },
+            endpoints: {
+              mtprotoWsPath: cfg.wsPath,
+              vlessWsPath: vlessCfg.enabled ? vlessCfg.path : null,
+              wsTestPath: "/" + encodeURIComponent(cfg.adminKey) + "/api/ws-test",
+            },
+          });
         return;
       }
       if (route === "api-config" && req.method === "POST") {
@@ -430,7 +496,7 @@ export function createProxyRouter(options: ProxyRouterOptions): Router {
             panelPath: basePath,
             statusPath: basePath + "/status",
             configPath: basePath + "/config",
-            state: buildPanelStatePayload(nextCfg, host, proto),
+            state: buildPanelStatePayload(nextCfg, host, proto, port),
           });
           return;
         }
@@ -448,7 +514,7 @@ export function createProxyRouter(options: ProxyRouterOptions): Router {
         }
         logEvent(
           "config_update",
-          `carrier=${nextCfg.carrier} maxStreams=${nextCfg.maxStreams} extra=${nextCfg.extraHosts.join(",") || "-"}`
+          `carrier=${nextCfg.carrier} maxStreams=${nextCfg.maxStreams} extra=${nextCfg.extraHosts.join(",") || "-"} vless=${nextCfg.vlessEnabled}`
         );
         const basePath = "/" + encodeURIComponent(nextCfg.adminKey);
         res.status(200).setHeader("Cache-Control", "no-store").json({
@@ -457,7 +523,7 @@ export function createProxyRouter(options: ProxyRouterOptions): Router {
           panelPath: basePath,
           statusPath: basePath + "/status",
           configPath: basePath + "/config",
-          state: buildPanelStatePayload(nextCfg, host, proto),
+          state: buildPanelStatePayload(nextCfg, host, proto, port),
         });
         return;
       }

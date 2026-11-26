@@ -19,6 +19,10 @@ export const STATS = {
   wsRejects: 0,
   panelViews: 0,
   statusViews: 0,
+  vlessConnections: 0,
+  vlessActive: 0,
+  vlessBytesUp: 0,
+  vlessBytesDown: 0,
 };
 
 const LOG_LIMIT = 150;

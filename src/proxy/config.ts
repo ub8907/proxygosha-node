@@ -30,6 +30,19 @@ export interface PortSecretEntry {
   keys: [Buffer, Buffer];
 }
 
+export interface VlessRuntimeConfig {
+  enabled: boolean;
+  uuid: string;
+  path: string;
+  disguisedDomain: string;
+  debug: boolean;
+}
+
+export const DEFAULT_VLESS_UUID = "03267b72-5095-44be-8af1-a511b692832b";
+export const DEFAULT_VLESS_PATH = "/helloss-jsusyxystsdsahysy";
+const VLESS_UUID_REGEX =
+  /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|00000000-0000-0000-0000-000000000000)$/i;
+
 export interface ProxyRuntime {
   base: Buffer | null;
   portSecrets: Record<number, PortSecretEntry>;
@@ -60,6 +73,10 @@ export interface ProxyRuntime {
   carrier: "websocket" | "websocket-lanes";
   batchBytes: number;
   ephemeralSetup: boolean;
+  vlessEnabled: boolean;
+  vlessUuid: string;
+  vlessPath: string;
+  vlessDisguisedDomain: string;
 }
 
 const RUNTIME_FILE_PATH = path.resolve(process.cwd(), "storage", "runtime.json");
@@ -217,6 +234,26 @@ export function resolveConfig(env: NodeJS.ProcessEnv, ignoreOverride = false) {
     if (parsedPorts.length > 0) dcPorts = parsedPorts;
   }
 
+  const vlessEnabled =
+    merged.VLESS_ENABLED !== undefined
+      ? merged.VLESS_ENABLED !== "false" && merged.VLESS_ENABLED !== "0"
+      : true;
+
+  const rawUuid = typeof merged.UUID === "string" ? merged.UUID.trim().toLowerCase() : "";
+  const vlessUuid = VLESS_UUID_REGEX.test(rawUuid) ? rawUuid : DEFAULT_VLESS_UUID;
+
+  const vlessPath =
+    typeof merged.VLESS_PATH === "string" && merged.VLESS_PATH.trim()
+      ? merged.VLESS_PATH.trim().startsWith("/")
+        ? merged.VLESS_PATH.trim()
+        : "/" + merged.VLESS_PATH.trim()
+      : DEFAULT_VLESS_PATH;
+
+  const vlessDisguisedDomain =
+    (typeof merged.DISGUISED_DOMAIN === "string" && merged.DISGUISED_DOMAIN.trim()) ||
+    decoyUrl ||
+    "https://example.com";
+
   return {
     secretHex,
     adminKey,
@@ -246,6 +283,10 @@ export function resolveConfig(env: NodeJS.ProcessEnv, ignoreOverride = false) {
     streamWindow: DEFAULT_CONFIG.streamWindow,
     dataChunk: DEFAULT_CONFIG.dataChunk,
     ephemeralSetup: runtimeOverrideEnv !== null,
+    vlessEnabled,
+    vlessUuid,
+    vlessPath,
+    vlessDisguisedDomain,
   };
 }
 
@@ -279,22 +320,16 @@ export function buildRuntime(cfg: ReturnType<typeof resolveConfig>): ProxyRuntim
     bridgeKeys.push(concat(Buffer.of(0xdd), base));
   }
 
+  // 所有端口统一使用同一个 SECRET（不再按端口派生不同密钥）
   const portSecrets: Record<number, PortSecretEntry> = {};
   if (base) {
+    const unifiedHex = "dd" + bytesToHex(base);
+    const unifiedKeys: [Buffer, Buffer] = [base, concat(Buffer.of(0xdd), base)];
     for (const p of HTTPS_PORTS) {
-      const sBytes = p === 443
-        ? base
-        : sha256(
-            concat(
-              Buffer.from("proxygosha-port-secret-v1\n", "utf8"),
-              base,
-              Buffer.from("\n" + p, "utf8")
-            )
-          ).subarray(0, 16);
       portSecrets[p] = {
-        secret: sBytes,
-        secretHex: "dd" + bytesToHex(sBytes),
-        keys: [sBytes, concat(Buffer.of(0xdd), sBytes)],
+        secret: base,
+        secretHex: unifiedHex,
+        keys: unifiedKeys,
       };
     }
   }
@@ -335,13 +370,28 @@ export function buildRuntime(cfg: ReturnType<typeof resolveConfig>): ProxyRuntim
     carrier: cfg.carrier,
     batchBytes: cfg.batchBytes,
     ephemeralSetup: cfg.ephemeralSetup,
+    vlessEnabled: cfg.vlessEnabled,
+    vlessUuid: cfg.vlessUuid,
+    vlessPath: cfg.vlessPath,
+    vlessDisguisedDomain: cfg.vlessDisguisedDomain,
+  };
+}
+
+export function getVlessRuntime(env: NodeJS.ProcessEnv = process.env): VlessRuntimeConfig {
+  const resolved = resolveConfig(env);
+  return {
+    enabled: resolved.vlessEnabled,
+    uuid: resolved.vlessUuid,
+    path: resolved.vlessPath,
+    disguisedDomain: resolved.vlessDisguisedDomain,
+    debug: resolved.debug,
   };
 }
 
 export function getRuntime(env: NodeJS.ProcessEnv = process.env): ProxyRuntime | null {
   reloadRuntimeFileIfChanged();
   const resolved = resolveConfig(env);
-  const cacheKey = `${resolved.secretHex}:${resolved.generatorKey}:${resolved.hostnames.join(",")}:${resolved.adTagHex}:${resolved.decoyUrl}:${resolved.maxStreams}:${resolved.sessionPath}:${resolved.wsPath}:${resolved.debug}:${resolved.carrier}:${resolved.acceptGenerated}:${resolved.generatorEnabled}:${resolved.adminKey}:${resolved.extraHosts.join(",")}:${resolved.dcPorts.join(",")}:${resolved.ephemeralSetup}`;
+  const cacheKey = `${resolved.secretHex}:${resolved.generatorKey}:${resolved.hostnames.join(",")}:${resolved.adTagHex}:${resolved.decoyUrl}:${resolved.maxStreams}:${resolved.sessionPath}:${resolved.wsPath}:${resolved.debug}:${resolved.carrier}:${resolved.acceptGenerated}:${resolved.generatorEnabled}:${resolved.adminKey}:${resolved.extraHosts.join(",")}:${resolved.dcPorts.join(",")}:${resolved.ephemeralSetup}:${resolved.vlessEnabled}:${resolved.vlessUuid}:${resolved.vlessPath}:${resolved.vlessDisguisedDomain}`;
   if (cachedRuntime && cachedKey === cacheKey) {
     return cachedRuntime;
   }
@@ -471,6 +521,38 @@ export function buildOverrideFromConfigInput(
   const generatorEnabled = typeof body.generatorEnabled === "boolean" ? body.generatorEnabled : currentCfg.generatorEnabled;
   const acceptGenerated = typeof body.acceptGenerated === "boolean" ? body.acceptGenerated : currentCfg.acceptGenerated;
 
+  const vlessEnabled = typeof body.vlessEnabled === "boolean" ? body.vlessEnabled : currentCfg.vlessEnabled;
+  const vlessUuid = typeof body.vlessUuid === "string"
+    ? body.vlessUuid.trim().toLowerCase()
+    : currentCfg.vlessUuid;
+  if (!VLESS_UUID_REGEX.test(vlessUuid)) {
+    return { ok: false, error: "UUID must be a valid UUID v4 string (e.g. 03267b72-5095-44be-8af1-a511b692832b)." };
+  }
+
+  let vlessPath = typeof body.vlessPath === "string" ? body.vlessPath.trim() : currentCfg.vlessPath;
+  if (!vlessPath) vlessPath = DEFAULT_VLESS_PATH;
+  if (!vlessPath.startsWith("/")) vlessPath = "/" + vlessPath;
+  if (!/^\/[A-Za-z0-9/_-]+$/.test(vlessPath)) {
+    return { ok: false, error: "VLESS_PATH contains invalid characters." };
+  }
+  if (vlessPath === sessionPath || vlessPath === wsPath) {
+    return { ok: false, error: "VLESS_PATH must be different from SESSION_PATH and WS_PATH." };
+  }
+
+  const vlessDisguisedDomain = typeof body.vlessDisguisedDomain === "string"
+    ? body.vlessDisguisedDomain.trim()
+    : currentCfg.vlessDisguisedDomain;
+  if (vlessDisguisedDomain !== "") {
+    if (!/^https?:\/\/.+/i.test(vlessDisguisedDomain)) {
+      return { ok: false, error: "DISGUISED_DOMAIN must start with http:// or https://, or be empty." };
+    }
+    try {
+      new URL(vlessDisguisedDomain);
+    } catch {
+      return { ok: false, error: "DISGUISED_DOMAIN is not a valid URL." };
+    }
+  }
+
   return {
     ok: true,
     override: {
@@ -488,6 +570,10 @@ export function buildOverrideFromConfigInput(
       DEBUG: debugFlag ? "true" : "false",
       GENERATOR_ENABLED: generatorEnabled ? "true" : "false",
       ACCEPT_GENERATED: acceptGenerated ? "true" : "false",
+      VLESS_ENABLED: vlessEnabled ? "true" : "false",
+      UUID: vlessUuid,
+      VLESS_PATH: vlessPath,
+      DISGUISED_DOMAIN: vlessDisguisedDomain || "https://example.com",
     },
   };
 }
@@ -691,7 +777,7 @@ export function verifyToken(cfg: ProxyRuntime, token: string, kind: number): { n
   return { nonce, mode: nonce[4] };
 }
 
-export function panelRoute(pathname: string, searchParams: URLSearchParams, cfg: ProxyRuntime): "panel" | "status" | "config" | "api-state" | "api-probe" | "api-config" | null {
+export function panelRoute(pathname: string, searchParams: URLSearchParams, cfg: ProxyRuntime): "panel" | "status" | "config" | "api-state" | "api-probe" | "api-ws-probe" | "api-config" | null {
   if (!cfg.adminKey) return null;
   let path = "";
   try {
@@ -705,6 +791,7 @@ export function panelRoute(pathname: string, searchParams: URLSearchParams, cfg:
   if (path && safeEqual(path, cfg.adminKey + "/config")) return "config";
   if (path && safeEqual(path, cfg.adminKey + "/api/state")) return "api-state";
   if (path && safeEqual(path, cfg.adminKey + "/api/probe")) return "api-probe";
+  if (path && safeEqual(path, cfg.adminKey + "/api/ws-probe")) return "api-ws-probe";
   if (path && safeEqual(path, cfg.adminKey + "/api/config")) return "api-config";
   if (generatorLabel(searchParams) === "" && safeEqual(searchParams.get("key") || "", cfg.adminKey)) {
     return "panel";
